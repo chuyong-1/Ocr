@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>TextClear — Interactive Editor</title>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    :root{
+      --font-sans:'Sora',system-ui,sans-serif;
+      --font-mono:'IBM Plex Mono',monospace;
+      --accent:#1D9E75;--accent-dark:#0F6E56;--accent-bg:rgba(29,158,117,0.08);
+      --danger:#E24B4A;--danger-bg:rgba(226,75,74,0.08);
+      --amber:#BA7517;--amber-bg:rgba(186,117,23,0.1);
+      --bg:#0E0F0D;--bg-card:#161714;--bg-hover:#1E1F1C;
+      --border:rgba(255,255,255,0.07);--border-mid:rgba(255,255,255,0.13);
+      --text:#E8E6DF;--text-dim:#8A8880;--text-faint:#4A4946;
+    }
+    html,body,#root{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:14px;}
+    ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:var(--border-mid);border-radius:2px;}
+    .layout{display:grid;grid-template-columns:1fr 320px;height:100vh;overflow:hidden;}
+    .canvas-area{display:flex;flex-direction:column;overflow:hidden;border-right:0.5px solid var(--border);}
+    .canvas-toolbar{padding:12px 16px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+    .canvas-scroll{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:24px;background:#0a0b09;}
+    .img-wrap{position:relative;display:inline-block;line-height:0;box-shadow:0 4px 32px rgba(0,0,0,0.5);}
+    .img-wrap img{display:block;max-width:100%;height:auto;}
+    .tbox{position:absolute;border:1.5px solid rgba(255,200,50,0.6);background:rgba(255,200,50,0.05);cursor:pointer;transition:all 0.12s;border-radius:2px;}
+    .tbox:hover{border-color:rgba(255,200,50,0.95);background:rgba(255,200,50,0.15);}
+    .tbox.sel-remove{border-color:var(--danger);background:rgba(226,75,74,0.2);}
+    .tbox.sel-replace{border-color:var(--accent);background:rgba(29,158,117,0.2);}
+    .tbox-label{position:absolute;top:-20px;left:0;font-family:var(--font-mono);font-size:9px;font-weight:500;padding:2px 5px;border-radius:3px 3px 0 0;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;pointer-events:none;}
+    .tbox:not(.sel-remove):not(.sel-replace) .tbox-label{background:rgba(255,200,50,0.9);color:#1a1200;}
+    .tbox.sel-remove .tbox-label{background:var(--danger);color:#fff;}
+    .tbox.sel-replace .tbox-label{background:var(--accent);color:#fff;}
+    .panel{display:flex;flex-direction:column;overflow:hidden;background:var(--bg-card);}
+    .panel-header{padding:16px;border-bottom:0.5px solid var(--border);}
+    .brand{font-size:16px;font-weight:600;letter-spacing:-0.3px;}
+    .brand em{color:var(--accent);font-style:normal;}
+    .brand-sub{font-family:var(--font-mono);font-size:9px;color:var(--text-faint);margin-top:2px;letter-spacing:0.5px;}
+    .panel-body{flex:1;overflow-y:auto;padding:12px;}
+    .panel-footer{padding:12px;border-top:0.5px solid var(--border);}
+    .sec{font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-faint);margin:12px 0 6px;}
+    .drop{border:1.5px dashed var(--border-mid);border-radius:10px;padding:28px 16px;text-align:center;cursor:pointer;transition:all 0.15s;}
+    .drop:hover,.drop.drag{border-color:var(--accent);background:var(--accent-bg);}
+    .drop-icon{font-size:24px;color:var(--text-faint);margin-bottom:8px;}
+    .drop-title{font-size:13px;font-weight:500;}
+    .drop-sub{font-size:11px;color:var(--text-dim);margin-top:3px;}
+    input[type=file]{display:none;}
+    .region-card{border:0.5px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px;transition:all 0.12s;}
+    .region-card.mode-remove{border-color:rgba(226,75,74,0.4);background:var(--danger-bg);}
+    .region-card.mode-replace{border-color:rgba(29,158,117,0.4);background:var(--accent-bg);}
+    .region-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
+    .region-text{font-size:12px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .region-conf{font-family:var(--font-mono);font-size:9px;color:var(--text-faint);}
+    .region-actions{display:flex;gap:4px;margin-bottom:6px;}
+    .chip{padding:3px 8px;border-radius:4px;font-size:10px;font-weight:500;cursor:pointer;border:0.5px solid var(--border-mid);background:transparent;color:var(--text-dim);transition:all 0.12s;font-family:inherit;}
+    .chip:hover{background:var(--bg-hover);}
+    .chip.active-remove{background:var(--danger-bg);border-color:var(--danger);color:var(--danger);}
+    .chip.active-replace{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);}
+    .replace-input{width:100%;font-size:11px;font-family:var(--font-mono);padding:5px 8px;background:var(--bg);color:var(--text);border:0.5px solid var(--border-mid);border-radius:6px;outline:none;}
+    .replace-input:focus{border-color:var(--accent);}
+    .replace-input::placeholder{color:var(--text-faint);}
+    .btn{display:flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;font-family:inherit;transition:all 0.15s;width:100%;}
+    .btn-primary{background:var(--accent);color:#fff;}
+    .btn-primary:hover{background:var(--accent-dark);}
+    .btn-primary:disabled{opacity:0.3;cursor:not-allowed;}
+    .btn-ghost{background:transparent;color:var(--text-dim);border:0.5px solid var(--border-mid);}
+    .btn-ghost:hover{background:var(--bg-hover);color:var(--text);}
+    .btn-row{display:flex;flex-direction:column;gap:6px;}
+    .status-bar{padding:8px 12px;border-radius:6px;font-size:11px;font-family:var(--font-mono);margin:8px 0;}
+    .status-running{background:var(--amber-bg);color:var(--amber);border:0.5px solid rgba(186,117,23,0.3);}
+    .status-done{background:var(--accent-bg);color:var(--accent);border:0.5px solid rgba(29,158,117,0.3);}
+    .status-error{background:var(--danger-bg);color:var(--danger);border:0.5px solid rgba(226,75,74,0.3);}
+    .pbar{background:rgba(255,255,255,0.05);border-radius:2px;height:3px;overflow:hidden;margin-top:6px;}
+    .pbar-fill{height:100%;border-radius:2px;background:var(--accent);transition:width 0.4s;}
+    .legend{display:flex;gap:10px;flex-wrap:wrap;}
+    .legend-item{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-dim);}
+    .legend-dot{width:8px;height:8px;border-radius:2px;}
+    .select-bar{display:flex;gap:6px;margin-bottom:8px;}
+    .select-bar button{flex:1;padding:5px;font-size:10px;font-family:var(--font-mono);background:transparent;color:var(--text-dim);border:0.5px solid var(--border);border-radius:6px;cursor:pointer;}
+    .select-bar button:hover{background:var(--bg-hover);color:var(--text);}
+    .slider-wrap{position:relative;overflow:hidden;line-height:0;cursor:ew-resize;user-select:none;}
+    .slider-wrap img{display:block;width:100%;height:auto;}
+    .slider-after{position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;}
+    .slider-after img{display:block;width:100%;height:auto;}
+    .slider-line{position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,0.8);pointer-events:none;}
+    .slider-knob{position:absolute;top:50%;transform:translateY(-50%);width:28px;height:28px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#333;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,0.4);}
+    .empty{text-align:center;padding:32px 16px;color:var(--text-faint);font-size:12px;font-family:var(--font-mono);}
+    .spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.1);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;}
+    @keyframes spin{to{transform:rotate(360deg);}}
+    select{width:100%;font-size:12px;padding:7px 10px;background:var(--bg);color:var(--text);border:0.5px solid var(--border-mid);border-radius:8px;outline:none;font-family:inherit;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useRef,useEffect,useCallback}=React;
+const API='http://localhost:8000';
+
+function BeforeAfter({beforeUrl,afterUrl}){
+  const [pos,setPos]=useState(50);
+  const dragging=useRef(false);
+  const ref=useRef();
+  const move=useCallback(e=>{
+    if(!dragging.current||!ref.current)return;
+    const r=ref.current.getBoundingClientRect();
+    setPos(Math.max(5,Math.min(95,((e.clientX-r.left)/r.width)*100)));
+  },[]);
+  useEffect(()=>{
+    const up=()=>{dragging.current=false;};
+    window.addEventListener('mouseup',up);
+    window.addEventListener('mousemove',move);
+    return()=>{window.removeEventListener('mouseup',up);window.removeEventListener('mousemove',move);};
+  },[move]);
+  return(
+    <div className="slider-wrap" ref={ref} onMouseDown={()=>{dragging.current=true;}}
+      style={{maxWidth:'calc(100vw - 360px)'}}>
+      <img src={beforeUrl} alt="original"/>
+      <div className="slider-after" style={{clipPath:`inset(0 0 0 ${pos}%)`}}>
+        <img src={afterUrl} alt="result"/>
+      </div>
+      <div className="slider-line" style={{left:`${pos}%`}}/>
+      <div className="slider-knob" style={{left:`calc(${pos}% - 14px)`}}>◀▶</div>
+    </div>
+  );
+}
+
+function App(){
+  const [imageFile,setImageFile]=useState(null);
+  const [imageUrl,setImageUrl]=useState(null);
+  const [natSize,setNatSize]=useState({w:1,h:1});
+  const [dispSize,setDispSize]=useState({w:1,h:1});
+  const [regions,setRegions]=useState([]);
+  const [selected,setSelected]=useState({});
+  const [detecting,setDetecting]=useState(false);
+  const [processing,setProcessing]=useState(false);
+  const [progress,setProgress]=useState(0);
+  const [status,setStatus]=useState(null);
+  const [resultUrl,setResultUrl]=useState(null);
+  const [showResult,setShowResult]=useState(false);
+  const [drag,setDrag]=useState(false);
+  const [language,setLanguage]=useState('en');
+  const imgRef=useRef();
+  const fileInp=useRef();
+
+  const reset=()=>{setImageFile(null);setImageUrl(null);setRegions([]);setSelected({});setResultUrl(null);setShowResult(false);setStatus(null);setProgress(0);};
+
+  const loadImage=async(file)=>{
+    reset();
+    setImageFile(file);
+    setImageUrl(URL.createObjectURL(file));
+  };
+
+  const runDetect=async(file,lang)=>{
+    setDetecting(true);
+    setStatus({type:'running',msg:'Scanning for text…'});
+    try{
+      const fd=new FormData();
+      fd.append('file',file);
+      fd.append('languages',JSON.stringify([lang]));
+      const r=await fetch(`${API}/api/detect`,{method:'POST',body:fd});
+      if(!r.ok)throw new Error(await r.text());
+      const data=await r.json();
+      setRegions(data.regions||[]);
+      setNatSize({w:data.image_w,h:data.image_h});
+      setStatus(data.regions?.length
+        ?{type:'done',msg:`${data.regions.length} region${data.regions.length>1?'s':''} found — click to select`}
+        :{type:'done',msg:'No text detected in this image'});
+    }catch(e){
+      setStatus({type:'error',msg:'Detection error: '+e.message});
+    }finally{
+      setDetecting(false);
+    }
+  };
+
+  useEffect(()=>{if(imageFile)runDetect(imageFile,language);},[imageFile]);
+
+  const onImgLoad=()=>{
+    if(imgRef.current)setDispSize({w:imgRef.current.offsetWidth,h:imgRef.current.offsetHeight});
+  };
+
+  const sx=dispSize.w/natSize.w;
+  const sy=dispSize.h/natSize.h;
+
+  const cycleRegion=(id)=>{
+    setSelected(prev=>{
+      const cur=prev[id];
+      if(!cur)return{...prev,[id]:{mode:'remove',replacement:''}};
+      if(cur.mode==='remove')return{...prev,[id]:{mode:'replace',replacement:''}};
+      const n={...prev};delete n[id];return n;
+    });
+  };
+
+  const setMode=(id,mode)=>setSelected(prev=>({...prev,[id]:{...(prev[id]||{replacement:''}),mode}}));
+  const setRepl=(id,val)=>setSelected(prev=>({...prev,[id]:{...prev[id],replacement:val}}));
+  const selectAll=(mode)=>{const n={};regions.forEach(r=>{n[r.id]={mode,replacement:''};});setSelected(n);};
+
+  const applyChanges=async()=>{
+    if(!imageFile||!Object.keys(selected).length)return;
+    setProcessing(true);setProgress(5);
+    setStatus({type:'running',msg:'Applying changes…'});
+    try{
+      const replacementMap={};
+      let hasReplace=false;
+      regions.forEach(r=>{
+        const s=selected[r.id];
+        if(!s)return;
+        if(s.mode==='replace'&&s.replacement){replacementMap[r.text]=s.replacement;hasReplace=true;}
+      });
+      const fd=new FormData();
+      fd.append('file',imageFile);
+      fd.append('mode',hasReplace?'replace':'remove');
+      fd.append('replacement_map',JSON.stringify(replacementMap));
+      fd.append('languages',JSON.stringify([language]));
+      fd.append('inpainter','lama');
+      setProgress(15);
+      const res=await fetch(`${API}/api/jobs`,{method:'POST',body:fd});
+      if(!res.ok)throw new Error(await res.text());
+      const job=await res.json();
+      setProgress(30);
+      // Poll
+      for(;;){
+        await new Promise(r=>setTimeout(r,1500));
+        const jr=await fetch(`${API}/api/jobs/${job.id}`);
+        const jd=await jr.json();
+        setProgress(jd.progress||50);
+        if(jd.status==='DONE'){
+          setResultUrl(`${API}/api/jobs/${job.id}/result`);
+          setShowResult(true);
+          setStatus({type:'done',msg:'Done! Drag the slider to compare ◀▶'});
+          setProgress(100);
+          break;
+        }
+        if(jd.status==='FAILED'){
+          throw new Error(jd.error_msg||'Job failed');
+        }
+      }
+    }catch(e){
+      setStatus({type:'error',msg:e.message});
+    }finally{
+      setProcessing(false);
+    }
+  };
+
+  const selCount=Object.keys(selected).length;
+  const remCount=Object.values(selected).filter(s=>s.mode==='remove').length;
+  const repCount=Object.values(selected).filter(s=>s.mode==='replace').length;
+
+  return(
+    <div className="layout">
+      {/* Canvas */}
+      <div className="canvas-area">
+        <div className="canvas-toolbar">
+          <div className="legend">
+            <div className="legend-item"><div className="legend-dot" style={{background:'rgba(255,200,50,0.6)',border:'1px solid rgba(255,200,50,0.9)'}}/><span>Detected</span></div>
+            <div className="legend-item"><div className="legend-dot" style={{background:'rgba(226,75,74,0.4)',border:'1px solid #E24B4A'}}/><span>Remove</span></div>
+            <div className="legend-item"><div className="legend-dot" style={{background:'rgba(29,158,117,0.4)',border:'1px solid #1D9E75'}}/><span>Replace</span></div>
+          </div>
+          {regions.length>0&&!showResult&&(
+            <span style={{marginLeft:'auto',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-faint)'}}>
+              click box: none → remove → replace → none
+            </span>
+          )}
+          {showResult&&<span style={{marginLeft:'auto',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--accent)'}}>drag slider to compare ◀▶</span>}
+        </div>
+        <div className="canvas-scroll"
+          onDragOver={e=>{e.preventDefault();setDrag(true);}}
+          onDragLeave={()=>setDrag(false)}
+          onDrop={e=>{e.preventDefault();setDrag(false);const f=e.dataTransfer.files[0];if(f)loadImage(f);}}>
+          {!imageUrl?(
+            <div className={`drop${drag?' drag':''}`} style={{width:480,marginTop:80}} onClick={()=>fileInp.current.click()}>
+              <input type="file" ref={fileInp} accept="image/*" onChange={e=>{if(e.target.files[0])loadImage(e.target.files[0]);}}/>
+              <div className="drop-icon">⬆</div>
+              <div className="drop-title">Drop an image here</div>
+              <div className="drop-sub">JPG · PNG · WEBP · BMP</div>
+            </div>
+          ):showResult&&resultUrl?(
+            <BeforeAfter beforeUrl={imageUrl} afterUrl={resultUrl}/>
+          ):(
+            <div className="img-wrap">
+              <img ref={imgRef} src={imageUrl} alt="input" onLoad={onImgLoad}
+                style={{maxWidth:'calc(100vw - 360px)',maxHeight:'calc(100vh - 80px)'}}/>
+              {regions.map(r=>{
+                const s=selected[r.id];
+                return(
+                  <div key={r.id}
+                    className={`tbox${s?` sel-${s.mode}`:''}`}
+                    style={{left:r.x*sx,top:r.y*sy,width:r.w*sx,height:r.h*sy}}
+                    onClick={()=>cycleRegion(r.id)}
+                    title={`"${r.text}" — click to cycle: remove → replace → deselect`}>
+                    <div className="tbox-label">
+                      {s?.mode==='replace'&&s.replacement?`→ ${s.replacement}`:r.text}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Panel */}
+      <div className="panel">
+        <div className="panel-header">
+          <div className="brand">Text<em>Clear</em></div>
+          <div className="brand-sub">// INTERACTIVE EDITOR</div>
+        </div>
+        <div className="panel-body">
+          <div className="sec">OCR language</div>
+          <select value={language} onChange={e=>{setLanguage(e.target.value);if(imageFile)runDetect(imageFile,e.target.value);}}>
+            <option value="en">English</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="es">Spanish</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ar">Arabic</option>
+            <option value="ko">Korean</option>
+            <option value="ru">Russian</option>
+          </select>
+
+          {status&&(
+            <div className={`status-bar status-${status.type}`}>
+              {status.type==='running'&&<span className="spinner"/>}
+              {status.msg}
+              {processing&&<div className="pbar"><div className="pbar-fill" style={{width:progress+'%'}}/></div>}
+            </div>
+          )}
+
+          {detecting&&<div className="empty"><span className="spinner"/>scanning…</div>}
+
+          {regions.length>0&&!detecting&&(
+            <>
+              <div className="sec">Detected text ({regions.length})</div>
+              <div className="select-bar">
+                <button onClick={()=>selectAll('remove')}>✕ Remove all</button>
+                <button onClick={()=>selectAll('replace')}>✎ Replace all</button>
+                <button onClick={()=>setSelected({})}>Clear</button>
+              </div>
+              {regions.map(r=>{
+                const s=selected[r.id];
+                return(
+                  <div key={r.id} className={`region-card${s?` mode-${s.mode}`:''}`}>
+                    <div className="region-top">
+                      <div className="region-text">"{r.text}"</div>
+                      <div className="region-conf">{Math.round(r.confidence*100)}%</div>
+                    </div>
+                    <div className="region-actions">
+                      <button className={`chip${s?.mode==='remove'?' active-remove':''}`}
+                        onClick={()=>setMode(r.id,'remove')}>✕ Remove</button>
+                      <button className={`chip${s?.mode==='replace'?' active-replace':''}`}
+                        onClick={()=>setMode(r.id,'replace')}>✎ Replace</button>
+                      {s&&<button className="chip" style={{color:'var(--text-faint)'}}
+                        onClick={()=>{const n={...selected};delete n[r.id];setSelected(n);}}>✕</button>}
+                    </div>
+                    {s?.mode==='replace'&&(
+                      <input className="replace-input" type="text"
+                        placeholder={`New text for "${r.text}"…`}
+                        value={s.replacement}
+                        onChange={e=>setRepl(r.id,e.target.value)}
+                        onClick={e=>e.stopPropagation()}/>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {!imageUrl&&!detecting&&<div className="empty">upload an image to begin</div>}
+        </div>
+
+        <div className="panel-footer">
+          {selCount>0&&(
+            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-faint)',marginBottom:8}}>
+              {remCount>0&&<span style={{color:'var(--danger)',marginRight:8}}>✕ {remCount} remove</span>}
+              {repCount>0&&<span style={{color:'var(--accent)'}}>✎ {repCount} replace</span>}
+            </div>
+          )}
+          <div className="btn-row">
+            {!showResult?(
+              <button className="btn btn-primary"
+                disabled={selCount===0||processing||detecting}
+                onClick={applyChanges}>
+                {processing
+                  ?<><span className="spinner"/>Processing…</>
+                  :`▶ Apply to ${selCount} region${selCount!==1?'s':''}`}
+              </button>
+            ):(
+              <>
+                <button className="btn btn-primary" onClick={()=>window.open(resultUrl,'_blank')}>⬇ Download result</button>
+                <button className="btn btn-ghost" onClick={()=>{setShowResult(false);setResultUrl(null);setSelected({});}}>← Edit more</button>
+              </>
+            )}
+            {imageUrl&&<button className="btn btn-ghost" onClick={reset}>New image</button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
