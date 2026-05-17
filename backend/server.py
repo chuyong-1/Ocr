@@ -46,13 +46,14 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 # ─────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────
-BASE_DIR    = Path(__file__).parent
-UPLOAD_DIR  = BASE_DIR / "uploads"
-RESULT_DIR  = BASE_DIR / "results"
-DB_URL      = f"sqlite:///{BASE_DIR / 'jobs.db'}"
+BASE_DIR    = Path(__file__).parent                       # → editor/backend/
+PROJECT_DIR = BASE_DIR.parent                              # → editor/
+UPLOAD_DIR  = PROJECT_DIR / "data" / "uploads"
+RESULT_DIR  = PROJECT_DIR / "data" / "results"
+DB_URL      = f"sqlite:///{PROJECT_DIR / 'data' / 'jobs.db'}"
 
-UPLOAD_DIR.mkdir(exist_ok=True)
-RESULT_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("textclear.api")

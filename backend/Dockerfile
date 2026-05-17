@@ -11,12 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Application code
+COPY backend/ ./backend/
+COPY models/  ./models/
 
-# Create persistent directories
-RUN mkdir -p uploads results
+# Runtime directories (volumes will overlay these in compose)
+RUN mkdir -p data/uploads data/results
 
 EXPOSE 8000

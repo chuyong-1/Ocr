@@ -10,9 +10,7 @@
 ║    • extract_for_editor()  ← single-call editor pipeline         ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
-from train_font_classifier import load_font_classifier, predict_font
-_font_clf = load_font_classifier()          # call once, caches ORT session
-region.font_name = predict_font(_font_clf, crop_gray)  # → "Arial"
+
 # ─────────────────────────────────────────────────────────────────
 # 0. IMPORTS
 # ─────────────────────────────────────────────────────────────────
@@ -44,20 +42,103 @@ class EditorBlock(TypedDict):
     Designed to be JSON-dumped directly into the metadata file that
     server.py / worker.py write to results/.
     """
-    text:       str
-    x:          int
-    y:          int
-    w:          int
-    h:          int
-    color:      str    # dominant text colour as CSS hex  e.g. "#2C2C2C"
-    bg_color:   str    # dominant background colour       e.g. "#F5F0EB"
-    size:       int    # estimated font size in CSS px
-    confidence: float  # EasyOCR confidence 0-1
+    text:        str
+    x:           int
+    y:           int
+    w:           int
+    h:           int
+    color:       str    # dominant text colour as CSS hex  e.g. "#2C2C2C"
+    bg_color:    str    # dominant background colour       e.g. "#F5F0EB"
+    size:        int    # estimated font size in CSS px
+    confidence:  float  # EasyOCR confidence 0-1
+    font_family: str    # predicted font family  e.g. "Arial"
 
 
 def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
     """Convert an (R, G, B) tuple to a CSS hex string like '#1A2B3C'."""
     return "#{:02X}{:02X}{:02X}".format(int(rgb[0]), int(rgb[1]), int(rgb[2]))
+
+
+# ─────────────────────────────────────────────────────────────────
+# 1-C.  NEW ▶  FontClassifier — offline ONNX font classification
+# ─────────────────────────────────────────────────────────────────
+class FontClassifier:
+    """
+    Offline font-family classifier backed by an ONNX model.
+
+    Gracefully degrades to a ``"sans-serif"`` fallback when the model
+    file is missing or ``onnxruntime`` is not installed.
+    """
+
+    DEFAULT_LABELS = ["Arial", "Times New Roman", "Courier New",
+                      "Calibri", "Georgia"]
+
+    def __init__(self, model_path: Optional[str] = None):
+        if model_path is None:
+            model_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "models", "font_classifier.onnx",
+            )
+        self.labels  = list(self.DEFAULT_LABELS)
+        self.session = None
+        try:
+            import onnxruntime as ort
+            if not os.path.isfile(model_path):
+                raise FileNotFoundError(
+                    f"ONNX model not found at {model_path}"
+                )
+            self.session = ort.InferenceSession(
+                model_path,
+                providers=["CPUExecutionProvider"],
+            )
+            log.info("FontClassifier loaded from %s", model_path)
+        except Exception as exc:          # noqa: BLE001
+            log.warning(
+                "FontClassifier unavailable (%s: %s) — "
+                "predictions will fall back to 'sans-serif'.",
+                type(exc).__name__, exc,
+            )
+
+    # ── prediction ───────────────────────────────────────────────
+    def predict(self, crop_bgr: np.ndarray) -> str:
+        """
+        Classify a word-level image crop into a font-family name.
+
+        Parameters
+        ----------
+        crop_bgr : np.ndarray
+            BGR uint8 image patch of the text region.
+
+        Returns
+        -------
+        str
+            Predicted font family, or ``"sans-serif"`` on failure.
+        """
+        if self.session is None or crop_bgr is None or crop_bgr.size == 0:
+            return "sans-serif"
+        try:
+            gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+            resized = cv2.resize(gray, (64, 64),
+                                 interpolation=cv2.INTER_AREA)
+            tensor = resized.astype(np.float32) / 255.0
+            tensor = tensor[np.newaxis, np.newaxis, :, :]  # [1,1,64,64]
+
+            input_name  = self.session.get_inputs()[0].name
+            outputs     = self.session.run(None, {input_name: tensor})
+            logits      = outputs[0]            # shape [1, num_classes]
+
+            # softmax → argmax
+            exp_logits  = np.exp(logits - np.max(logits))
+            probs       = exp_logits / exp_logits.sum()
+            class_idx   = int(np.argmax(probs))
+
+            if class_idx < len(self.labels):
+                return self.labels[class_idx]
+            return "sans-serif"
+        except Exception:
+            log.debug("FontClassifier.predict() failed — using fallback.",
+                      exc_info=True)
+            return "sans-serif"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -465,19 +546,28 @@ def extract_for_editor(
     cleaned    = inpainter.inpaint(image_bgr, mask)
     log.info("Inpainting complete  (%d region(s)).", len(regions))
 
-    # ── Stage 5: Build EditorBlock list ─────────────────────────
+    # ── Stage 5: Font classification + Build EditorBlock list ───
+    font_classifier = FontClassifier()
+    H, W = image_bgr.shape[:2]
     blocks: List[EditorBlock] = []
     for r in regions:
+        # Safe crop for font classification
+        x1, y1 = max(0, r.x), max(0, r.y)
+        x2, y2 = min(W, r.x + r.w), min(H, r.y + r.h)
+        crop_patch = image_bgr[y1:y2, x1:x2]
+        font_family = font_classifier.predict(crop_patch)
+
         blocks.append(EditorBlock(
-            text       = r.text,
-            x          = r.x,
-            y          = r.y,
-            w          = r.w,
-            h          = r.h,
-            color      = rgb_to_hex(r.text_color),
-            bg_color   = rgb_to_hex(r.bg_color),
-            size       = r.font_size,
-            confidence = round(r.confidence, 4),
+            text        = r.text,
+            x           = r.x,
+            y           = r.y,
+            w           = r.w,
+            h           = r.h,
+            color       = rgb_to_hex(r.text_color),
+            bg_color    = rgb_to_hex(r.bg_color),
+            size        = r.font_size,
+            confidence  = round(r.confidence, 4),
+            font_family = font_family,
         ))
 
     return cleaned, blocks

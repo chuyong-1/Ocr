@@ -67,9 +67,10 @@ celery_app.conf.update(
 # ─────────────────────────────────────────────────────────────────
 # Database  (mirrors server.py; re-initialised for worker process)
 # ─────────────────────────────────────────────────────────────────
-BASE_DIR   = Path(__file__).parent
-RESULT_DIR = BASE_DIR.parent / "results"
-DB_URL     = f"sqlite:///{BASE_DIR / 'jobs.db'}"
+BASE_DIR    = Path(__file__).parent                       # → editor/backend/
+PROJECT_DIR = BASE_DIR.parent                              # → editor/
+RESULT_DIR  = PROJECT_DIR / "data" / "results"
+DB_URL      = f"sqlite:///{PROJECT_DIR / 'data' / 'jobs.db'}"
 
 engine   = create_engine(DB_URL, connect_args={"check_same_thread": False})
 Session_ = sessionmaker(autocommit=False, autoflush=False, bind=engine)
