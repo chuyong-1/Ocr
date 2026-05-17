@@ -1,0 +1,199 @@
+# PixelScribe — Offline Content-Aware Image Text Editor
+
+A fully offline, content-aware tool for removing and replacing text in images.
+No cloud APIs. No subscriptions. Runs entirely on your machine.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Upload image  →  OCR detects text  →  Inpainting erases it        │
+│  →  Editable fields overlay the cleaned image  →  Export PNG       │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Quick Start
+
+```bash
+# 1. Install Python 3.10+, then:
+chmod +x start.sh && ./start.sh
+
+# 2. Open the frontend in your browser:
+open frontend/index.html
+
+# 3. Upload an image and click "PROCESS IMAGE"
+```
+
+---
+
+## Project Structure
+
+```
+texteditor/
+├── backend/
+│   ├── app.py              ← FastAPI server (OCR + inpainting pipeline)
+│   └── requirements.txt    ← Python dependencies
+├── frontend/
+│   └── index.html          ← Vanilla JS + Tailwind CSS frontend
+├── start.sh                ← One-command launcher
+└── README.md
+```
+
+---
+
+## Architecture & Pipeline
+
+### Backend (`backend/app.py`)
+
+```
+POST /process-image
+        │
+        ▼
+  ┌─────────────┐     ┌──────────────────┐     ┌──────────────────┐
+  │  EasyOCR    │────▶│  StyleExtractor  │────▶│   MaskBuilder    │
+  │  (detect)   │     │  (K-Means color) │     │  (dilated mask)  │
+  └─────────────┘     └──────────────────┘     └──────────────────┘
+        │                      │                        │
+        │                      ▼                        ▼
+        │              text_color hex            cv2.inpaint()
+        │              bg_color hex              (Telea algorithm)
+        │              font_size (px)                   │
+        │                                               │
+        └──────────────────────────────────────────────▼
+                                              JSON Response:
+                                              { image_b64, blocks[] }
+```
+
+**Stage 1 — OCR (EasyOCR)**
+- Loads EasyOCR with your chosen language(s) once; cached for subsequent calls
+- Returns corner points, text string, and confidence per detection
+- Minimum confidence filter removes low-quality matches
+
+**Stage 2 — Style Extraction (per bounding box)**
+- Crops the region from the image
+- Otsu threshold separates dark (text) pixels from light (background) pixels
+- K-Means (k=2) on text pixels → dominant text colour
+- K-Means (k=2) on background pixels → dominant background colour  
+- Font-size estimate: `bbox_height × 0.85` (cap-height heuristic)
+
+**Stage 3 — Mask Generation**
+- Binary mask: 255 inside all text bboxes, 0 elsewhere
+- 8px elliptical dilation → covers antialiased glyph edges
+- Single combined mask = one inpainting pass (faster than per-region)
+
+**Stage 4 — Inpainting (`cv2.inpaint`)**
+- Algorithm: Telea (fast, artifact-free for text)  
+- Inpaint radius: 12px neighbourhood
+- Alternative: switch `INPAINT_METHOD = cv2.INPAINT_NS` for Navier-Stokes
+- For complex backgrounds, swap to LaMa: `pip install simple-lama-inpainting`
+
+**Stage 5 — API Response**
+```json
+{
+  "image_b64": "data:image/png;base64,…",
+  "image_w": 1920,
+  "image_h": 1080,
+  "blocks": [
+    {
+      "id": "uuid",
+      "text": "Hello World",
+      "x": 120, "y": 45, "w": 280, "h": 38,
+      "color": "#2C2C2C",
+      "bg_color": "#F5F0E8",
+      "size": 32,
+      "confidence": 0.987
+    }
+  ]
+}
+```
+
+### Frontend (`frontend/index.html`)
+
+**Overlay System**
+- Cleaned background rendered as `<img>` in a relative-positioned workspace
+- Each text block → `contenteditable` div, absolutely positioned over the image
+- Position is scaled from native image pixels to rendered display pixels
+- `scaleFactor = renderedWidth / nativeWidth` recalculated on window resize
+- Clicking a field selects all text for instant replacement
+
+**Export System**
+- Off-screen `<canvas>` at native image resolution (no scaling artifacts)
+- Draws inpainted background at 1:1 pixel ratio
+- Iterates all editable fields, reads `.textContent`, renders with `ctx.fillText`
+- Downloads as `pixelscribe-export.png`
+
+---
+
+## API Reference
+
+### `POST /process-image`
+
+| Field        | Type   | Default | Description                          |
+|-------------|--------|---------|--------------------------------------|
+| `file`       | File   | —       | Image file (JPEG/PNG/WEBP/BMP)       |
+| `languages`  | string | `"en"`  | Comma-separated EasyOCR language codes |
+| `confidence` | float  | `0.25`  | Min OCR confidence (0–1)             |
+
+**Supported language codes:** `en` `fr` `de` `es` `zh` `ja` `ko` `ar` `ru` (and [80+ more](https://www.jaided.ai/easyocr/))
+
+### `GET /health`
+```json
+{ "status": "ok", "ocr_loaded": [["en"]] }
+```
+
+### `GET /docs`
+Interactive Swagger UI (auto-generated by FastAPI)
+
+---
+
+## Upgrading Inpainting Quality
+
+The default `cv2.inpaint` works well for simple backgrounds.
+For complex textures (photographs, gradients), upgrade to **LaMa**:
+
+```bash
+pip install simple-lama-inpainting
+```
+
+Then in `app.py`, replace `inpaint_image()`:
+
+```python
+from simple_lama_inpainting import SimpleLama
+from PIL import Image
+
+_lama = SimpleLama()
+
+def inpaint_image(image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    pil_img  = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+    pil_mask = Image.fromarray(mask)
+    result   = _lama(pil_img, pil_mask)
+    return cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
+```
+
+---
+
+## Performance Tips
+
+| Image size   | EasyOCR  | Inpaint | Total (CPU) |
+|-------------|---------|---------|-------------|
+| 800×600     | ~2s     | <0.5s   | ~3s         |
+| 1920×1080   | ~5s     | ~1s     | ~6s         |
+| 4K          | ~12s    | ~3s     | ~15s        |
+
+- **GPU:** Set `gpu=True` in `get_reader()` and `TextDetector` for 5–10× OCR speedup (needs CUDA)
+- **First run:** EasyOCR downloads models (~200 MB) on first language load
+- **Caching:** Reader is singleton-cached; subsequent calls with the same language are instant
+
+---
+
+## Requirements
+
+- Python 3.10+
+- ~500 MB disk (EasyOCR models, ~200 MB each language on first run)
+- RAM: ~1 GB for English model; ~2 GB for CJK
+
+---
+
+## License
+
+MIT — use freely in personal and commercial projects.

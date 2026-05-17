@@ -1,0 +1,10 @@
+# PixelScribe — Python dependencies
+# pip install -r requirements.txt
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9      # FastAPI file uploads
+easyocr>=1.7.1
+opencv-python-headless>=4.9.0  # headless = no GUI deps (server-safe)
+numpy>=1.26.0
+Pillow>=10.3.0

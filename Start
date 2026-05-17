@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════
+# PixelScribe — One-command startup
+# ═══════════════════════════════════════════════════════
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$SCRIPT_DIR/backend"
+FRONTEND_DIR="$SCRIPT_DIR/frontend"
+
+PYTHON="${PYTHON:-python3}"
+PORT="${PORT:-8000}"
+
+echo ""
+echo "  ██████╗ ██╗██╗  ██╗███████╗██╗      ███████╗ ██████╗██████╗ ██╗██████╗ ███████╗"
+echo "  ██╔══██╗██║╚██╗██╔╝██╔════╝██║      ██╔════╝██╔════╝██╔══██╗██║██╔══██╗██╔════╝"
+echo "  ██████╔╝██║ ╚███╔╝ █████╗  ██║      ███████╗██║     ██████╔╝██║██████╔╝█████╗  "
+echo "  ██╔═══╝ ██║ ██╔██╗ ██╔══╝  ██║      ╚════██║██║     ██╔══██╗██║██╔══██╗██╔══╝  "
+echo "  ██║     ██║██╔╝ ██╗███████╗███████╗ ███████║╚██████╗██║  ██║██║██████╔╝███████╗"
+echo "  ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝╚═════╝ ╚══════╝"
+echo ""
+echo "  Offline Content-Aware Image Text Editor"
+echo "  ────────────────────────────────────────"
+echo ""
+
+# ── Check Python ──────────────────────────────────────
+if ! command -v "$PYTHON" &>/dev/null; then
+  echo "  ✗  Python not found. Install Python 3.10+ and retry."
+  exit 1
+fi
+
+echo "  ✓  Python: $($PYTHON --version)"
+
+# ── Create venv if needed ─────────────────────────────
+VENV="$BACKEND_DIR/.venv"
+if [ ! -d "$VENV" ]; then
+  echo "  →  Creating virtual environment…"
+  "$PYTHON" -m venv "$VENV"
+fi
+
+source "$VENV/bin/activate"
+
+# ── Install dependencies ───────────────────────────────
+echo "  →  Installing dependencies (this may take a minute on first run)…"
+pip install -q --upgrade pip
+pip install -q -r "$BACKEND_DIR/requirements.txt"
+
+echo "  ✓  Dependencies ready."
+echo ""
+echo "  ┌─────────────────────────────────────────────────┐"
+echo "  │  API:      http://localhost:${PORT}                │"
+echo "  │  Frontend: open frontend/index.html in browser   │"
+echo "  │  Docs:     http://localhost:${PORT}/docs            │"
+echo "  │  Press Ctrl+C to stop                            │"
+echo "  └─────────────────────────────────────────────────┘"
+echo ""
+
+# ── Launch ─────────────────────────────────────────────
+cd "$BACKEND_DIR"
+uvicorn app:app --host 0.0.0.0 --port "$PORT" --reload

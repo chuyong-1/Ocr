@@ -1,409 +1,981 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>TextClear — Interactive Editor</title>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PixelScribe — Image Text Editor</title>
+
+  <!-- Fonts: Bebas Neue (display) + DM Mono (ui) + DM Sans (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+
   <style>
-    *{box-sizing:border-box;margin:0;padding:0;}
-    :root{
-      --font-sans:'Sora',system-ui,sans-serif;
-      --font-mono:'IBM Plex Mono',monospace;
-      --accent:#1D9E75;--accent-dark:#0F6E56;--accent-bg:rgba(29,158,117,0.08);
-      --danger:#E24B4A;--danger-bg:rgba(226,75,74,0.08);
-      --amber:#BA7517;--amber-bg:rgba(186,117,23,0.1);
-      --bg:#0E0F0D;--bg-card:#161714;--bg-hover:#1E1F1C;
-      --border:rgba(255,255,255,0.07);--border-mid:rgba(255,255,255,0.13);
-      --text:#E8E6DF;--text-dim:#8A8880;--text-faint:#4A4946;
+    /* ── Design Tokens ─────────────────────────────────────── */
+    :root {
+      --ink:     #0D0D0D;
+      --paper:   #F5F0E8;
+      --cream:   #EDE8DC;
+      --warm:    #D4CFC3;
+      --accent:  #C8440A;       /* burnt sienna */
+      --accent2: #3A5F8A;       /* steel blue */
+      --dim:     #8A8680;
+      --border:  #D0CABC;
+      --font-display: 'Bebas Neue', Impact, sans-serif;
+      --font-mono:    'DM Mono', 'Courier New', monospace;
+      --font-body:    'DM Sans', system-ui, sans-serif;
     }
-    html,body,#root{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:14px;}
-    ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:var(--border-mid);border-radius:2px;}
-    .layout{display:grid;grid-template-columns:1fr 320px;height:100vh;overflow:hidden;}
-    .canvas-area{display:flex;flex-direction:column;overflow:hidden;border-right:0.5px solid var(--border);}
-    .canvas-toolbar{padding:12px 16px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-    .canvas-scroll{flex:1;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:24px;background:#0a0b09;}
-    .img-wrap{position:relative;display:inline-block;line-height:0;box-shadow:0 4px 32px rgba(0,0,0,0.5);}
-    .img-wrap img{display:block;max-width:100%;height:auto;}
-    .tbox{position:absolute;border:1.5px solid rgba(255,200,50,0.6);background:rgba(255,200,50,0.05);cursor:pointer;transition:all 0.12s;border-radius:2px;}
-    .tbox:hover{border-color:rgba(255,200,50,0.95);background:rgba(255,200,50,0.15);}
-    .tbox.sel-remove{border-color:var(--danger);background:rgba(226,75,74,0.2);}
-    .tbox.sel-replace{border-color:var(--accent);background:rgba(29,158,117,0.2);}
-    .tbox-label{position:absolute;top:-20px;left:0;font-family:var(--font-mono);font-size:9px;font-weight:500;padding:2px 5px;border-radius:3px 3px 0 0;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis;pointer-events:none;}
-    .tbox:not(.sel-remove):not(.sel-replace) .tbox-label{background:rgba(255,200,50,0.9);color:#1a1200;}
-    .tbox.sel-remove .tbox-label{background:var(--danger);color:#fff;}
-    .tbox.sel-replace .tbox-label{background:var(--accent);color:#fff;}
-    .panel{display:flex;flex-direction:column;overflow:hidden;background:var(--bg-card);}
-    .panel-header{padding:16px;border-bottom:0.5px solid var(--border);}
-    .brand{font-size:16px;font-weight:600;letter-spacing:-0.3px;}
-    .brand em{color:var(--accent);font-style:normal;}
-    .brand-sub{font-family:var(--font-mono);font-size:9px;color:var(--text-faint);margin-top:2px;letter-spacing:0.5px;}
-    .panel-body{flex:1;overflow-y:auto;padding:12px;}
-    .panel-footer{padding:12px;border-top:0.5px solid var(--border);}
-    .sec{font-family:var(--font-mono);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:var(--text-faint);margin:12px 0 6px;}
-    .drop{border:1.5px dashed var(--border-mid);border-radius:10px;padding:28px 16px;text-align:center;cursor:pointer;transition:all 0.15s;}
-    .drop:hover,.drop.drag{border-color:var(--accent);background:var(--accent-bg);}
-    .drop-icon{font-size:24px;color:var(--text-faint);margin-bottom:8px;}
-    .drop-title{font-size:13px;font-weight:500;}
-    .drop-sub{font-size:11px;color:var(--text-dim);margin-top:3px;}
-    input[type=file]{display:none;}
-    .region-card{border:0.5px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:6px;transition:all 0.12s;}
-    .region-card.mode-remove{border-color:rgba(226,75,74,0.4);background:var(--danger-bg);}
-    .region-card.mode-replace{border-color:rgba(29,158,117,0.4);background:var(--accent-bg);}
-    .region-top{display:flex;align-items:center;gap:8px;margin-bottom:6px;}
-    .region-text{font-size:12px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .region-conf{font-family:var(--font-mono);font-size:9px;color:var(--text-faint);}
-    .region-actions{display:flex;gap:4px;margin-bottom:6px;}
-    .chip{padding:3px 8px;border-radius:4px;font-size:10px;font-weight:500;cursor:pointer;border:0.5px solid var(--border-mid);background:transparent;color:var(--text-dim);transition:all 0.12s;font-family:inherit;}
-    .chip:hover{background:var(--bg-hover);}
-    .chip.active-remove{background:var(--danger-bg);border-color:var(--danger);color:var(--danger);}
-    .chip.active-replace{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);}
-    .replace-input{width:100%;font-size:11px;font-family:var(--font-mono);padding:5px 8px;background:var(--bg);color:var(--text);border:0.5px solid var(--border-mid);border-radius:6px;outline:none;}
-    .replace-input:focus{border-color:var(--accent);}
-    .replace-input::placeholder{color:var(--text-faint);}
-    .btn{display:flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;font-family:inherit;transition:all 0.15s;width:100%;}
-    .btn-primary{background:var(--accent);color:#fff;}
-    .btn-primary:hover{background:var(--accent-dark);}
-    .btn-primary:disabled{opacity:0.3;cursor:not-allowed;}
-    .btn-ghost{background:transparent;color:var(--text-dim);border:0.5px solid var(--border-mid);}
-    .btn-ghost:hover{background:var(--bg-hover);color:var(--text);}
-    .btn-row{display:flex;flex-direction:column;gap:6px;}
-    .status-bar{padding:8px 12px;border-radius:6px;font-size:11px;font-family:var(--font-mono);margin:8px 0;}
-    .status-running{background:var(--amber-bg);color:var(--amber);border:0.5px solid rgba(186,117,23,0.3);}
-    .status-done{background:var(--accent-bg);color:var(--accent);border:0.5px solid rgba(29,158,117,0.3);}
-    .status-error{background:var(--danger-bg);color:var(--danger);border:0.5px solid rgba(226,75,74,0.3);}
-    .pbar{background:rgba(255,255,255,0.05);border-radius:2px;height:3px;overflow:hidden;margin-top:6px;}
-    .pbar-fill{height:100%;border-radius:2px;background:var(--accent);transition:width 0.4s;}
-    .legend{display:flex;gap:10px;flex-wrap:wrap;}
-    .legend-item{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text-dim);}
-    .legend-dot{width:8px;height:8px;border-radius:2px;}
-    .select-bar{display:flex;gap:6px;margin-bottom:8px;}
-    .select-bar button{flex:1;padding:5px;font-size:10px;font-family:var(--font-mono);background:transparent;color:var(--text-dim);border:0.5px solid var(--border);border-radius:6px;cursor:pointer;}
-    .select-bar button:hover{background:var(--bg-hover);color:var(--text);}
-    .slider-wrap{position:relative;overflow:hidden;line-height:0;cursor:ew-resize;user-select:none;}
-    .slider-wrap img{display:block;width:100%;height:auto;}
-    .slider-after{position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;}
-    .slider-after img{display:block;width:100%;height:auto;}
-    .slider-line{position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,0.8);pointer-events:none;}
-    .slider-knob{position:absolute;top:50%;transform:translateY(-50%);width:28px;height:28px;background:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#333;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,0.4);}
-    .empty{text-align:center;padding:32px 16px;color:var(--text-faint);font-size:12px;font-family:var(--font-mono);}
-    .spinner{display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,0.1);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;}
-    @keyframes spin{to{transform:rotate(360deg);}}
-    select{width:100%;font-size:12px;padding:7px 10px;background:var(--bg);color:var(--text);border:0.5px solid var(--border-mid);border-radius:8px;outline:none;font-family:inherit;}
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font-body);
+      font-size: 14px;
+      overflow: hidden;
+    }
+
+    /* ── Scrollbar ────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: var(--cream); }
+    ::-webkit-scrollbar-thumb { background: var(--warm); border-radius: 3px; }
+
+    /* ── Layout shell ─────────────────────────────────────── */
+    #shell {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      grid-template-rows: 56px 1fr 36px;
+      height: 100vh;
+      grid-template-areas:
+        "topbar topbar"
+        "panel  canvas"
+        "footer footer";
+    }
+
+    /* ── Top bar ──────────────────────────────────────────── */
+    #topbar {
+      grid-area: topbar;
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      border-bottom: 1.5px solid var(--ink);
+      background: var(--ink);
+      color: var(--paper);
+      gap: 24px;
+    }
+    .logo {
+      font-family: var(--font-display);
+      font-size: 28px;
+      letter-spacing: 2px;
+      line-height: 1;
+      color: var(--paper);
+    }
+    .logo span { color: var(--accent); }
+    .tagline {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: #888;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      border-left: 1px solid #444;
+      padding-left: 16px;
+    }
+    .topbar-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .pill {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      letter-spacing: 0.8px;
+    }
+    .pill-warn  { background: rgba(200, 68, 10, 0.2); color: #FF7B50; border: 1px solid rgba(200, 68, 10, 0.4); }
+    .pill-ok    { background: rgba(50, 180, 100, 0.15); color: #5AC87A; border: 1px solid rgba(50, 180, 100, 0.3); }
+    .pill-idle  { background: rgba(255,255,255,0.05); color: #888; border: 1px solid #333; }
+
+    /* ── Left panel ───────────────────────────────────────── */
+    #panel {
+      grid-area: panel;
+      border-right: 1.5px solid var(--ink);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--cream);
+    }
+    .panel-section {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sec-label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 10px;
+    }
+
+    /* ── Upload zone ──────────────────────────────────────── */
+    #drop-zone {
+      border: 1.5px dashed var(--warm);
+      border-radius: 4px;
+      padding: 28px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s;
+      background: var(--paper);
+    }
+    #drop-zone:hover, #drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(200, 68, 10, 0.04);
+    }
+    #drop-zone .icon { font-size: 28px; margin-bottom: 6px; opacity: 0.5; }
+    #drop-zone .hint { font-size: 12px; font-weight: 500; }
+    #drop-zone .sub  { font-family: var(--font-mono); font-size: 10px; color: var(--dim); margin-top: 3px; }
+    #file-input { display: none; }
+
+    /* ── Language selector ────────────────────────────────── */
+    select, input[type="range"] {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--paper);
+      color: var(--ink);
+      width: 100%;
+      outline: none;
+      cursor: pointer;
+      appearance: none;
+    }
+    select:focus { border-color: var(--accent2); }
+
+    /* ── Process button ───────────────────────────────────── */
+    #btn-process {
+      width: 100%;
+      padding: 10px 16px;
+      background: var(--ink);
+      color: var(--paper);
+      border: none;
+      font-family: var(--font-display);
+      font-size: 18px;
+      letter-spacing: 2px;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.15s;
+      position: relative;
+      overflow: hidden;
+    }
+    #btn-process:hover:not(:disabled) { background: var(--accent); }
+    #btn-process:disabled { opacity: 0.3; cursor: not-allowed; }
+    #btn-process .loader {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Block list ───────────────────────────────────────── */
+    #block-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+    .block-card {
+      padding: 8px 10px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      cursor: pointer;
+      transition: all 0.1s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .block-card:hover { background: var(--paper); border-color: var(--border); }
+    .block-card.active { background: var(--paper); border-color: var(--accent); }
+    .block-swatch {
+      width: 12px; height: 12px;
+      border-radius: 2px;
+      border: 1px solid rgba(0,0,0,0.15);
+      flex-shrink: 0;
+    }
+    .block-text {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+    }
+    .block-meta {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    /* ── Download / reset buttons ──────────────────────────── */
+    .btn-row { display: flex; gap: 6px; }
+    .btn-sm {
+      flex: 1;
+      padding: 7px 8px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.5px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--paper);
+      color: var(--ink);
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.12s;
+    }
+    .btn-sm:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+    .btn-sm.accent { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-sm.accent:hover { opacity: 0.85; }
+    .btn-sm:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* ── Canvas area ──────────────────────────────────────── */
+    #canvas-area {
+      grid-area: canvas;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      background:
+        radial-gradient(ellipse at 30% 20%, rgba(200,68,10,0.04) 0%, transparent 60%),
+        radial-gradient(ellipse at 70% 80%, rgba(58,95,138,0.05) 0%, transparent 55%),
+        repeating-linear-gradient(0deg, transparent, transparent 23px, var(--border) 23px, var(--border) 24px),
+        repeating-linear-gradient(90deg, transparent, transparent 23px, var(--border) 23px, var(--border) 24px),
+        var(--paper);
+      position: relative;
+    }
+
+    /* ── Welcome state ────────────────────────────────────── */
+    #welcome {
+      text-align: center;
+      user-select: none;
+      pointer-events: none;
+    }
+    #welcome .big {
+      font-family: var(--font-display);
+      font-size: 88px;
+      line-height: 0.9;
+      letter-spacing: 4px;
+      color: rgba(13,13,13,0.06);
+    }
+    #welcome .sub {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--dim);
+      margin-top: 16px;
+      letter-spacing: 1px;
+    }
+
+    /* ── Image workspace ─────────────────────────────────── */
+    #workspace {
+      position: relative;
+      display: none;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.12);
+    }
+    #workspace img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      user-select: none;
+    }
+
+    /* ── Text overlay container ───────────────────────────── */
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;     /* pass-through unless a field is targeted */
+    }
+
+    /* ── Editable text fields ─────────────────────────────── */
+    .txt-field {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      line-height: 1.15;
+      white-space: pre;
+      cursor: text;
+      pointer-events: all;
+      border: 1.5px solid transparent;
+      border-radius: 2px;
+      padding: 1px 3px;
+      transition: border-color 0.12s, background 0.12s;
+      outline: none;
+      background: transparent;
+      /* text-shadow applied to improve legibility on complex backgrounds */
+    }
+    .txt-field:hover {
+      border-color: rgba(58, 95, 138, 0.5);
+      background: rgba(58, 95, 138, 0.06);
+    }
+    .txt-field:focus {
+      border-color: var(--accent2);
+      background: rgba(58, 95, 138, 0.1);
+      z-index: 10;
+    }
+    .txt-field.highlighted {
+      border-color: var(--accent) !important;
+      background: rgba(200, 68, 10, 0.08) !important;
+    }
+
+    /* ── Export overlay ───────────────────────────────────── */
+    #export-toast {
+      position: fixed;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--ink);
+      color: var(--paper);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 8px 18px;
+      border-radius: 20px;
+      opacity: 0;
+      transition: all 0.25s;
+      pointer-events: none;
+      letter-spacing: 0.5px;
+    }
+    #export-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Status bar ───────────────────────────────────────── */
+    #footer {
+      grid-area: footer;
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      gap: 20px;
+      border-top: 1px solid var(--border);
+      background: var(--cream);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: 0.5px;
+    }
+    #footer span { display: flex; align-items: center; gap: 5px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
+    .dot.green { background: #5AC87A; }
+    .dot.red   { background: #FF6B6B; }
+    .dot.amber { background: #F0A832; }
+
+    /* ── Progress bar ─────────────────────────────────────── */
+    #progress-wrap {
+      position: fixed;
+      top: 56px;
+      left: 300px;
+      right: 0;
+      height: 3px;
+      z-index: 100;
+      display: none;
+    }
+    #progress-bar {
+      height: 100%;
+      background: var(--accent);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    /* ── Tooltip ──────────────────────────────────────────── */
+    .tip {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--dim);
+      line-height: 1.5;
+    }
+
+    /* ── Animations ───────────────────────────────────────── */
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .block-card { animation: fadeSlideIn 0.2s ease both; }
   </style>
 </head>
 <body>
-<div id="root"></div>
-<script type="text/babel">
-const {useState,useRef,useEffect,useCallback}=React;
-const API='http://localhost:8000';
 
-function BeforeAfter({beforeUrl,afterUrl}){
-  const [pos,setPos]=useState(50);
-  const dragging=useRef(false);
-  const ref=useRef();
-  const move=useCallback(e=>{
-    if(!dragging.current||!ref.current)return;
-    const r=ref.current.getBoundingClientRect();
-    setPos(Math.max(5,Math.min(95,((e.clientX-r.left)/r.width)*100)));
-  },[]);
-  useEffect(()=>{
-    const up=()=>{dragging.current=false;};
-    window.addEventListener('mouseup',up);
-    window.addEventListener('mousemove',move);
-    return()=>{window.removeEventListener('mouseup',up);window.removeEventListener('mousemove',move);};
-  },[move]);
-  return(
-    <div className="slider-wrap" ref={ref} onMouseDown={()=>{dragging.current=true;}}
-      style={{maxWidth:'calc(100vw - 360px)'}}>
-      <img src={beforeUrl} alt="original"/>
-      <div className="slider-after" style={{clipPath:`inset(0 0 0 ${pos}%)`}}>
-        <img src={afterUrl} alt="result"/>
-      </div>
-      <div className="slider-line" style={{left:`${pos}%`}}/>
-      <div className="slider-knob" style={{left:`calc(${pos}% - 14px)`}}>◀▶</div>
+<div id="shell">
+
+  <!-- ████  TOP BAR  ████ -->
+  <header id="topbar">
+    <div class="logo">PIXEL<span>SCRIBE</span></div>
+    <div class="tagline">offline · content-aware · text editor</div>
+    <div class="topbar-right">
+      <div class="pill pill-idle" id="server-pill">⬤ connecting…</div>
     </div>
-  );
+  </header>
+
+  <!-- ████  LEFT PANEL  ████ -->
+  <aside id="panel">
+
+    <!-- Upload -->
+    <div class="panel-section">
+      <div class="sec-label">01 — Source Image</div>
+      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <input type="file" id="file-input" accept="image/*" />
+        <div class="icon">⬆</div>
+        <div class="hint">Drop or click to upload</div>
+        <div class="sub">JPG · PNG · WEBP · BMP (max 30 MB)</div>
+      </div>
+    </div>
+
+    <!-- Config -->
+    <div class="panel-section">
+      <div class="sec-label">02 — OCR Config</div>
+
+      <div style="margin-bottom:10px;">
+        <label class="tip" style="display:block; margin-bottom:5px;">Language</label>
+        <select id="lang-select">
+          <option value="en">English</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="es">Spanish</option>
+          <option value="zh">Chinese (Simplified)</option>
+          <option value="ja">Japanese</option>
+          <option value="ko">Korean</option>
+          <option value="ar">Arabic</option>
+          <option value="ru">Russian</option>
+          <option value="en,fr">English + French</option>
+          <option value="en,de">English + German</option>
+          <option value="en,es">English + Spanish</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom:10px;">
+        <label class="tip" style="display:block; margin-bottom:5px;">
+          Min Confidence: <strong id="conf-val">25%</strong>
+        </label>
+        <input type="range" id="conf-slider" min="5" max="90" value="25" step="5" />
+      </div>
+
+      <button id="btn-process" disabled>PROCESS IMAGE</button>
+
+      <div class="tip" style="margin-top:8px; text-align:center;">
+        Extracts text · erases originals · overlays editable fields
+      </div>
+    </div>
+
+    <!-- Block list -->
+    <div class="panel-section" style="padding-bottom:8px;">
+      <div class="sec-label" style="margin-bottom:0; display:flex; justify-content:space-between; align-items:center;">
+        <span>03 — Text Blocks</span>
+        <span id="block-count" style="color:var(--ink);">—</span>
+      </div>
+    </div>
+    <div id="block-list">
+      <div style="text-align:center; padding:24px 8px; font-family:var(--font-mono); font-size:10px; color:var(--dim);">
+        Upload an image to begin
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="panel-section">
+      <div class="sec-label">04 — Export</div>
+      <div class="btn-row">
+        <button class="btn-sm accent" id="btn-export" disabled onclick="exportComposite()">
+          ↓ Export PNG
+        </button>
+        <button class="btn-sm" id="btn-reset" onclick="resetAll()">
+          ↺ Reset
+        </button>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ████  CANVAS AREA  ████ -->
+  <main id="canvas-area">
+    <div id="welcome">
+      <div class="big">EDIT<br/>TEXT</div>
+      <div class="sub">upload an image → run OCR → edit inline</div>
+    </div>
+
+    <div id="workspace">
+      <img id="canvas-img" src="" alt="cleaned background" />
+      <div id="overlay"></div>
+    </div>
+  </main>
+
+  <!-- ████  FOOTER STATUS  ████ -->
+  <footer id="footer">
+    <span><div class="dot" id="status-dot"></div><span id="status-text">Idle</span></span>
+    <span id="img-size">—</span>
+    <span id="block-info">—</span>
+    <span style="margin-left:auto;">PixelScribe v1.0 · Offline · No cloud APIs</span>
+  </footer>
+
+</div>
+
+<!-- Progress bar -->
+<div id="progress-wrap"><div id="progress-bar"></div></div>
+
+<!-- Toast -->
+<div id="export-toast">Exported to Downloads ✓</div>
+
+<!-- ████████████████████████████████████████████████████████████
+     JAVASCRIPT
+████████████████████████████████████████████████████████████ -->
+<script>
+/* ─────────────────────────────────────────────────────────────────
+   Config
+───────────────────────────────────────────────────────────────── */
+const API_BASE = 'http://localhost:8000';
+
+/* ─────────────────────────────────────────────────────────────────
+   State
+───────────────────────────────────────────────────────────────── */
+let state = {
+  file:       null,
+  imageW:     0,
+  imageH:     0,
+  blocks:     [],       // raw from API
+  scaleFactor:1,        // rendered-px / native-px ratio
+  activeId:   null,
+  cleanB64:   null,     // base64 of inpainted image
+};
+
+/* ─────────────────────────────────────────────────────────────────
+   DOM shortcuts
+───────────────────────────────────────────────────────────────── */
+const $  = id => document.getElementById(id);
+const el = (tag, cls='', txt='') => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (txt) e.textContent = txt;
+  return e;
+};
+
+/* ─────────────────────────────────────────────────────────────────
+   Server health check
+───────────────────────────────────────────────────────────────── */
+async function checkServer() {
+  try {
+    const r = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      setPill('ok', '⬤ server ready');
+      return true;
+    }
+  } catch(_) {}
+  setPill('warn', '⬤ server offline');
+  return false;
 }
 
-function App(){
-  const [imageFile,setImageFile]=useState(null);
-  const [imageUrl,setImageUrl]=useState(null);
-  const [natSize,setNatSize]=useState({w:1,h:1});
-  const [dispSize,setDispSize]=useState({w:1,h:1});
-  const [regions,setRegions]=useState([]);
-  const [selected,setSelected]=useState({});
-  const [detecting,setDetecting]=useState(false);
-  const [processing,setProcessing]=useState(false);
-  const [progress,setProgress]=useState(0);
-  const [status,setStatus]=useState(null);
-  const [resultUrl,setResultUrl]=useState(null);
-  const [showResult,setShowResult]=useState(false);
-  const [drag,setDrag]=useState(false);
-  const [language,setLanguage]=useState('en');
-  const imgRef=useRef();
-  const fileInp=useRef();
+function setPill(type, text) {
+  const p = $('server-pill');
+  p.className = `pill pill-${type}`;
+  p.textContent = text;
+}
 
-  const reset=()=>{setImageFile(null);setImageUrl(null);setRegions([]);setSelected({});setResultUrl(null);setShowResult(false);setStatus(null);setProgress(0);};
+/* ─────────────────────────────────────────────────────────────────
+   Confidence slider
+───────────────────────────────────────────────────────────────── */
+$('conf-slider').addEventListener('input', e => {
+  $('conf-val').textContent = e.target.value + '%';
+});
 
-  const loadImage=async(file)=>{
-    reset();
-    setImageFile(file);
-    setImageUrl(URL.createObjectURL(file));
-  };
+/* ─────────────────────────────────────────────────────────────────
+   File upload — drop zone + input
+───────────────────────────────────────────────────────────────── */
+const dropZone = $('drop-zone');
+const fileInput = $('file-input');
 
-  const runDetect=async(file,lang)=>{
-    setDetecting(true);
-    setStatus({type:'running',msg:'Scanning for text…'});
-    try{
-      const fd=new FormData();
-      fd.append('file',file);
-      fd.append('languages',JSON.stringify([lang]));
-      const r=await fetch(`${API}/api/detect`,{method:'POST',body:fd});
-      if(!r.ok)throw new Error(await r.text());
-      const data=await r.json();
-      setRegions(data.regions||[]);
-      setNatSize({w:data.image_w,h:data.image_h});
-      setStatus(data.regions?.length
-        ?{type:'done',msg:`${data.regions.length} region${data.regions.length>1?'s':''} found — click to select`}
-        :{type:'done',msg:'No text detected in this image'});
-    }catch(e){
-      setStatus({type:'error',msg:'Detection error: '+e.message});
-    }finally{
-      setDetecting(false);
-    }
-  };
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f && f.type.startsWith('image/')) setFile(f);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files[0]) setFile(e.target.files[0]);
+});
 
-  useEffect(()=>{if(imageFile)runDetect(imageFile,language);},[imageFile]);
+function setFile(file) {
+  state.file = file;
+  dropZone.querySelector('.hint').textContent = file.name;
+  dropZone.querySelector('.sub').textContent =
+    `${(file.size / 1024).toFixed(0)} KB — click to change`;
+  $('btn-process').disabled = false;
+  setStatus('idle', `File loaded: ${file.name}`);
+  $('img-size').textContent = `File: ${(file.size/1024).toFixed(0)} KB`;
+}
 
-  const onImgLoad=()=>{
-    if(imgRef.current)setDispSize({w:imgRef.current.offsetWidth,h:imgRef.current.offsetHeight});
-  };
+/* ─────────────────────────────────────────────────────────────────
+   Status bar helpers
+───────────────────────────────────────────────────────────────── */
+function setStatus(type, msg) {
+  const dot = $('status-dot');
+  dot.className = 'dot' + (type === 'ok' ? ' green' : type === 'error' ? ' red' : type === 'busy' ? ' amber' : '');
+  $('status-text').textContent = msg;
+}
 
-  const sx=dispSize.w/natSize.w;
-  const sy=dispSize.h/natSize.h;
+/* ─────────────────────────────────────────────────────────────────
+   Progress bar animation
+───────────────────────────────────────────────────────────────── */
+let _progTimer = null;
+function showProgress(pct) {
+  $('progress-wrap').style.display = 'block';
+  $('progress-bar').style.width = pct + '%';
+}
+function hideProgress() {
+  showProgress(100);
+  setTimeout(() => {
+    $('progress-wrap').style.display = 'none';
+    $('progress-bar').style.width = '0%';
+  }, 400);
+}
 
-  const cycleRegion=(id)=>{
-    setSelected(prev=>{
-      const cur=prev[id];
-      if(!cur)return{...prev,[id]:{mode:'remove',replacement:''}};
-      if(cur.mode==='remove')return{...prev,[id]:{mode:'replace',replacement:''}};
-      const n={...prev};delete n[id];return n;
+/* ─────────────────────────────────────────────────────────────────
+   Main: process image
+───────────────────────────────────────────────────────────────── */
+$('btn-process').addEventListener('click', processImage);
+
+async function processImage() {
+  if (!state.file) return;
+
+  const btn = $('btn-process');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loader"></span>PROCESSING…';
+  setStatus('busy', 'Running OCR + inpainting…');
+  showProgress(10);
+  setPill('warn', '⬤ processing…');
+
+  try {
+    const fd = new FormData();
+    fd.append('file', state.file);
+    fd.append('languages', $('lang-select').value);
+    fd.append('confidence', ($('conf-slider').value / 100).toString());
+
+    showProgress(20);
+
+    const res = await fetch(`${API_BASE}/process-image`, {
+      method: 'POST',
+      body: fd,
     });
-  };
 
-  const setMode=(id,mode)=>setSelected(prev=>({...prev,[id]:{...(prev[id]||{replacement:''}),mode}}));
-  const setRepl=(id,val)=>setSelected(prev=>({...prev,[id]:{...prev[id],replacement:val}}));
-  const selectAll=(mode)=>{const n={};regions.forEach(r=>{n[r.id]={mode,replacement:''};});setSelected(n);};
+    showProgress(80);
 
-  const applyChanges=async()=>{
-    if(!imageFile||!Object.keys(selected).length)return;
-    setProcessing(true);setProgress(5);
-    setStatus({type:'running',msg:'Applying changes…'});
-    try{
-      const replacementMap={};
-      let hasReplace=false;
-      regions.forEach(r=>{
-        const s=selected[r.id];
-        if(!s)return;
-        if(s.mode==='replace'&&s.replacement){replacementMap[r.text]=s.replacement;hasReplace=true;}
-      });
-      const fd=new FormData();
-      fd.append('file',imageFile);
-      fd.append('mode',hasReplace?'replace':'remove');
-      fd.append('replacement_map',JSON.stringify(replacementMap));
-      fd.append('languages',JSON.stringify([language]));
-      fd.append('inpainter','lama');
-      setProgress(15);
-      const res=await fetch(`${API}/api/jobs`,{method:'POST',body:fd});
-      if(!res.ok)throw new Error(await res.text());
-      const job=await res.json();
-      setProgress(30);
-      // Poll
-      for(;;){
-        await new Promise(r=>setTimeout(r,1500));
-        const jr=await fetch(`${API}/api/jobs/${job.id}`);
-        const jd=await jr.json();
-        setProgress(jd.progress||50);
-        if(jd.status==='DONE'){
-          setResultUrl(`${API}/api/jobs/${job.id}/result`);
-          setShowResult(true);
-          setStatus({type:'done',msg:'Done! Drag the slider to compare ◀▶'});
-          setProgress(100);
-          break;
-        }
-        if(jd.status==='FAILED'){
-          throw new Error(jd.error_msg||'Job failed');
-        }
-      }
-    }catch(e){
-      setStatus({type:'error',msg:e.message});
-    }finally{
-      setProcessing(false);
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Server error ${res.status}: ${err}`);
     }
-  };
 
-  const selCount=Object.keys(selected).length;
-  const remCount=Object.values(selected).filter(s=>s.mode==='remove').length;
-  const repCount=Object.values(selected).filter(s=>s.mode==='replace').length;
+    const data = await res.json();
+    showProgress(95);
 
-  return(
-    <div className="layout">
-      {/* Canvas */}
-      <div className="canvas-area">
-        <div className="canvas-toolbar">
-          <div className="legend">
-            <div className="legend-item"><div className="legend-dot" style={{background:'rgba(255,200,50,0.6)',border:'1px solid rgba(255,200,50,0.9)'}}/><span>Detected</span></div>
-            <div className="legend-item"><div className="legend-dot" style={{background:'rgba(226,75,74,0.4)',border:'1px solid #E24B4A'}}/><span>Remove</span></div>
-            <div className="legend-item"><div className="legend-dot" style={{background:'rgba(29,158,117,0.4)',border:'1px solid #1D9E75'}}/><span>Replace</span></div>
-          </div>
-          {regions.length>0&&!showResult&&(
-            <span style={{marginLeft:'auto',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-faint)'}}>
-              click box: none → remove → replace → none
-            </span>
-          )}
-          {showResult&&<span style={{marginLeft:'auto',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--accent)'}}>drag slider to compare ◀▶</span>}
-        </div>
-        <div className="canvas-scroll"
-          onDragOver={e=>{e.preventDefault();setDrag(true);}}
-          onDragLeave={()=>setDrag(false)}
-          onDrop={e=>{e.preventDefault();setDrag(false);const f=e.dataTransfer.files[0];if(f)loadImage(f);}}>
-          {!imageUrl?(
-            <div className={`drop${drag?' drag':''}`} style={{width:480,marginTop:80}} onClick={()=>fileInp.current.click()}>
-              <input type="file" ref={fileInp} accept="image/*" onChange={e=>{if(e.target.files[0])loadImage(e.target.files[0]);}}/>
-              <div className="drop-icon">⬆</div>
-              <div className="drop-title">Drop an image here</div>
-              <div className="drop-sub">JPG · PNG · WEBP · BMP</div>
-            </div>
-          ):showResult&&resultUrl?(
-            <BeforeAfter beforeUrl={imageUrl} afterUrl={resultUrl}/>
-          ):(
-            <div className="img-wrap">
-              <img ref={imgRef} src={imageUrl} alt="input" onLoad={onImgLoad}
-                style={{maxWidth:'calc(100vw - 360px)',maxHeight:'calc(100vh - 80px)'}}/>
-              {regions.map(r=>{
-                const s=selected[r.id];
-                return(
-                  <div key={r.id}
-                    className={`tbox${s?` sel-${s.mode}`:''}`}
-                    style={{left:r.x*sx,top:r.y*sy,width:r.w*sx,height:r.h*sy}}
-                    onClick={()=>cycleRegion(r.id)}
-                    title={`"${r.text}" — click to cycle: remove → replace → deselect`}>
-                    <div className="tbox-label">
-                      {s?.mode==='replace'&&s.replacement?`→ ${s.replacement}`:r.text}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+    // Store state
+    state.cleanB64 = data.image_b64;
+    state.imageW   = data.image_w;
+    state.imageH   = data.image_h;
+    state.blocks   = data.blocks;
 
-      {/* Panel */}
-      <div className="panel">
-        <div className="panel-header">
-          <div className="brand">Text<em>Clear</em></div>
-          <div className="brand-sub">// INTERACTIVE EDITOR</div>
-        </div>
-        <div className="panel-body">
-          <div className="sec">OCR language</div>
-          <select value={language} onChange={e=>{setLanguage(e.target.value);if(imageFile)runDetect(imageFile,e.target.value);}}>
-            <option value="en">English</option>
-            <option value="fr">French</option>
-            <option value="de">German</option>
-            <option value="es">Spanish</option>
-            <option value="zh">Chinese</option>
-            <option value="ja">Japanese</option>
-            <option value="ar">Arabic</option>
-            <option value="ko">Korean</option>
-            <option value="ru">Russian</option>
-          </select>
+    // Render
+    renderWorkspace(data);
+    populateBlockList(data.blocks);
 
-          {status&&(
-            <div className={`status-bar status-${status.type}`}>
-              {status.type==='running'&&<span className="spinner"/>}
-              {status.msg}
-              {processing&&<div className="pbar"><div className="pbar-fill" style={{width:progress+'%'}}/></div>}
-            </div>
-          )}
+    hideProgress();
+    setStatus('ok', `Done — ${data.blocks.length} text block(s) found`);
+    setPill('ok', '⬤ server ready');
+    $('btn-export').disabled = false;
 
-          {detecting&&<div className="empty"><span className="spinner"/>scanning…</div>}
-
-          {regions.length>0&&!detecting&&(
-            <>
-              <div className="sec">Detected text ({regions.length})</div>
-              <div className="select-bar">
-                <button onClick={()=>selectAll('remove')}>✕ Remove all</button>
-                <button onClick={()=>selectAll('replace')}>✎ Replace all</button>
-                <button onClick={()=>setSelected({})}>Clear</button>
-              </div>
-              {regions.map(r=>{
-                const s=selected[r.id];
-                return(
-                  <div key={r.id} className={`region-card${s?` mode-${s.mode}`:''}`}>
-                    <div className="region-top">
-                      <div className="region-text">"{r.text}"</div>
-                      <div className="region-conf">{Math.round(r.confidence*100)}%</div>
-                    </div>
-                    <div className="region-actions">
-                      <button className={`chip${s?.mode==='remove'?' active-remove':''}`}
-                        onClick={()=>setMode(r.id,'remove')}>✕ Remove</button>
-                      <button className={`chip${s?.mode==='replace'?' active-replace':''}`}
-                        onClick={()=>setMode(r.id,'replace')}>✎ Replace</button>
-                      {s&&<button className="chip" style={{color:'var(--text-faint)'}}
-                        onClick={()=>{const n={...selected};delete n[r.id];setSelected(n);}}>✕</button>}
-                    </div>
-                    {s?.mode==='replace'&&(
-                      <input className="replace-input" type="text"
-                        placeholder={`New text for "${r.text}"…`}
-                        value={s.replacement}
-                        onChange={e=>setRepl(r.id,e.target.value)}
-                        onClick={e=>e.stopPropagation()}/>
-                    )}
-                  </div>
-                );
-              })}
-            </>
-          )}
-
-          {!imageUrl&&!detecting&&<div className="empty">upload an image to begin</div>}
-        </div>
-
-        <div className="panel-footer">
-          {selCount>0&&(
-            <div style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--text-faint)',marginBottom:8}}>
-              {remCount>0&&<span style={{color:'var(--danger)',marginRight:8}}>✕ {remCount} remove</span>}
-              {repCount>0&&<span style={{color:'var(--accent)'}}>✎ {repCount} replace</span>}
-            </div>
-          )}
-          <div className="btn-row">
-            {!showResult?(
-              <button className="btn btn-primary"
-                disabled={selCount===0||processing||detecting}
-                onClick={applyChanges}>
-                {processing
-                  ?<><span className="spinner"/>Processing…</>
-                  :`▶ Apply to ${selCount} region${selCount!==1?'s':''}`}
-              </button>
-            ):(
-              <>
-                <button className="btn btn-primary" onClick={()=>window.open(resultUrl,'_blank')}>⬇ Download result</button>
-                <button className="btn btn-ghost" onClick={()=>{setShowResult(false);setResultUrl(null);setSelected({});}}>← Edit more</button>
-              </>
-            )}
-            {imageUrl&&<button className="btn btn-ghost" onClick={reset}>New image</button>}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  } catch (err) {
+    hideProgress();
+    setStatus('error', 'Error: ' + err.message);
+    setPill('ok', '⬤ server ready');
+    console.error(err);
+    alert('Processing failed:\n' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'PROCESS IMAGE';
+  }
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+/* ─────────────────────────────────────────────────────────────────
+   Render workspace: cleaned image + text overlays
+───────────────────────────────────────────────────────────────── */
+function renderWorkspace(data) {
+  const workspace = $('workspace');
+  const img       = $('canvas-img');
+  const overlay   = $('overlay');
+
+  // Show workspace, hide welcome
+  $('welcome').style.display = 'none';
+  workspace.style.display = 'inline-block';
+
+  // Set image source (base64 PNG)
+  img.src = data.image_b64;
+
+  // Once image loads, compute scale and place fields
+  img.onload = () => {
+    const rect = img.getBoundingClientRect();
+    state.scaleFactor = rect.width / data.image_w;
+    placeOverlays(data.blocks, overlay);
+
+    $('img-size').textContent = `${data.image_w}×${data.image_h}px`;
+    $('block-info').textContent = `${data.blocks.length} text block(s)`;
+  };
+
+  // Handle window resize — reposition overlays
+  window.addEventListener('resize', debounce(() => {
+    if (!state.blocks.length) return;
+    const rect = img.getBoundingClientRect();
+    state.scaleFactor = rect.width / state.imageW;
+    placeOverlays(state.blocks, overlay);
+  }, 200));
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Place editable overlays
+───────────────────────────────────────────────────────────────── */
+function placeOverlays(blocks, container) {
+  container.innerHTML = '';
+  const s = state.scaleFactor;
+
+  blocks.forEach(block => {
+    /**
+     * Each text block gets a contenteditable div absolutely positioned
+     * over the cleaned image, styled to match the extracted color + size.
+     */
+    const field = document.createElement('div');
+    field.contentEditable = 'true';
+    field.className = 'txt-field';
+    field.id = 'field-' + block.id;
+    field.dataset.blockId = block.id;
+    field.textContent = block.text;
+    field.spellcheck = false;
+    field.autocomplete = 'off';
+
+    // ── Position & size ──
+    field.style.left     = Math.round(block.x * s) + 'px';
+    field.style.top      = Math.round(block.y * s) + 'px';
+    field.style.width    = Math.round(block.w * s) + 'px';
+    field.style.minHeight= Math.round(block.h * s) + 'px';
+
+    // ── Typography — match extracted style ──
+    field.style.fontSize   = Math.round(block.size * s) + 'px';
+    field.style.color      = block.color;
+    field.style.fontFamily = 'inherit';   // browser default; no forced font
+
+    // Subtle text shadow for legibility on any background
+    const shadow = hexToRgb(block.bg_color);
+    if (shadow) {
+      field.style.textShadow =
+        `0 0 4px rgba(${shadow.r},${shadow.g},${shadow.b},0.6),` +
+        `1px 1px 0 rgba(${shadow.r},${shadow.g},${shadow.b},0.4)`;
+    }
+
+    // ── Events ──
+    field.addEventListener('focus', () => {
+      setActiveBlock(block.id);
+    });
+    field.addEventListener('blur', () => {
+      state.activeId = null;
+    });
+    // Select all on first click for easy replacement
+    field.addEventListener('click', function(e) {
+      if (!this._clicked) {
+        this._clicked = true;
+        selectAll(this);
+        setTimeout(() => { this._clicked = false; }, 600);
+      }
+    });
+
+    container.appendChild(field);
+  });
+}
+
+function selectAll(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function hexToRgb(hex) {
+  const m = hex.replace('#','').match(/.{2}/g);
+  if (!m) return null;
+  return { r: parseInt(m[0],16), g: parseInt(m[1],16), b: parseInt(m[2],16) };
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Block list in the panel
+───────────────────────────────────────────────────────────────── */
+function populateBlockList(blocks) {
+  const list = $('block-list');
+  list.innerHTML = '';
+  $('block-count').textContent = blocks.length;
+
+  if (!blocks.length) {
+    list.innerHTML = `<div style="text-align:center; padding:20px 8px; font-family:var(--font-mono); font-size:10px; color:var(--dim);">No text detected.<br>Try lowering the confidence threshold.</div>`;
+    return;
+  }
+
+  blocks.forEach((block, i) => {
+    const card = el('div', 'block-card');
+    card.style.animationDelay = (i * 25) + 'ms';
+    card.dataset.blockId = block.id;
+
+    const swatch = el('div', 'block-swatch');
+    swatch.style.background = block.color;
+
+    const text = el('div', 'block-text');
+    text.textContent = `"${block.text}"`;
+
+    const meta = el('div', 'block-meta');
+    meta.textContent = `${block.size}px · ${Math.round(block.confidence * 100)}%`;
+
+    card.append(swatch, text, meta);
+    card.addEventListener('click', () => {
+      setActiveBlock(block.id);
+      const field = document.getElementById('field-' + block.id);
+      if (field) {
+        field.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        field.focus();
+        selectAll(field);
+      }
+    });
+
+    list.appendChild(card);
+  });
+}
+
+function setActiveBlock(id) {
+  state.activeId = id;
+
+  // Highlight card
+  document.querySelectorAll('.block-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.blockId === id);
+  });
+
+  // Highlight field
+  document.querySelectorAll('.txt-field').forEach(f => {
+    f.classList.toggle('highlighted', f.dataset.blockId === id);
+  });
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Export composite — draw cleaned image + overlay text onto canvas
+───────────────────────────────────────────────────────────────── */
+function exportComposite() {
+  if (!state.cleanB64) return;
+
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width  = state.imageW;
+  exportCanvas.height = state.imageH;
+  const ctx = exportCanvas.getContext('2d');
+
+  // Draw inpainted background
+  const bgImg = new Image();
+  bgImg.onload = () => {
+    ctx.drawImage(bgImg, 0, 0, state.imageW, state.imageH);
+
+    // Draw each editable field's current text
+    const s = 1 / state.scaleFactor;   // screen→native scale
+
+    document.querySelectorAll('.txt-field').forEach(field => {
+      const blockId = field.dataset.blockId;
+      const block = state.blocks.find(b => b.id === blockId);
+      if (!block) return;
+
+      const text = field.textContent;
+      if (!text) return;
+
+      // Parse screen-space position back to native pixels
+      const left = parseInt(field.style.left) * s;
+      const top  = parseInt(field.style.top)  * s;
+      const w    = parseInt(field.style.width) * s;
+      const h    = parseInt(field.style.minHeight) * s;
+
+      // Text styling
+      const fontSize = block.size;
+      ctx.font      = `${fontSize}px sans-serif`;
+      ctx.fillStyle = block.color;
+
+      // Background rectangle behind text (bg_color)
+      ctx.fillStyle = block.bg_color;
+      ctx.fillRect(left, top, w, h);
+
+      // Render text
+      ctx.fillStyle = block.color;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, left + 3, top + h / 2, w - 6);
+    });
+
+    // Download
+    const link = document.createElement('a');
+    link.download = 'pixelscribe-export.png';
+    link.href = exportCanvas.toDataURL('image/png');
+    link.click();
+
+    // Toast
+    const toast = $('export-toast');
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2800);
+  };
+  bgImg.src = state.cleanB64;
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Reset
+───────────────────────────────────────────────────────────────── */
+function resetAll() {
+  state = { file:null, imageW:0, imageH:0, blocks:[], scaleFactor:1, activeId:null, cleanB64:null };
+  $('canvas-img').src = '';
+  $('overlay').innerHTML = '';
+  $('workspace').style.display = 'none';
+  $('welcome').style.display = 'block';
+  $('block-list').innerHTML = `<div style="text-align:center; padding:24px 8px; font-family:var(--font-mono); font-size:10px; color:var(--dim);">Upload an image to begin</div>`;
+  $('block-count').textContent = '—';
+  $('block-info').textContent = '—';
+  $('img-size').textContent = '—';
+  $('btn-export').disabled = true;
+  $('btn-process').disabled = true;
+  dropZone.querySelector('.hint').textContent = 'Drop or click to upload';
+  dropZone.querySelector('.sub').textContent = 'JPG · PNG · WEBP · BMP (max 30 MB)';
+  $('file-input').value = '';
+  setStatus('idle', 'Idle');
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Utility: debounce
+───────────────────────────────────────────────────────────────── */
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Boot
+───────────────────────────────────────────────────────────────── */
+(async () => {
+  const ok = await checkServer();
+  setStatus(ok ? 'idle' : 'error', ok ? 'Idle' : 'Backend offline — start the server');
+})();
 </script>
+
 </body>
 </html>
