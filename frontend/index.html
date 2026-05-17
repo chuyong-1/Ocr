@@ -3,979 +3,1242 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PixelScribe — Image Text Editor</title>
+  <title>PixelScribe — Content-Aware Text Editor</title>
 
-  <!-- Fonts: Bebas Neue (display) + DM Mono (ui) + DM Sans (body) -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
 
-  <style>
-    /* ── Design Tokens ─────────────────────────────────────── */
-    :root {
-      --ink:     #0D0D0D;
-      --paper:   #F5F0E8;
-      --cream:   #EDE8DC;
-      --warm:    #D4CFC3;
-      --accent:  #C8440A;       /* burnt sienna */
-      --accent2: #3A5F8A;       /* steel blue */
-      --dim:     #8A8680;
-      --border:  #D0CABC;
-      --font-display: 'Bebas Neue', Impact, sans-serif;
-      --font-mono:    'DM Mono', 'Courier New', monospace;
-      --font-body:    'DM Sans', system-ui, sans-serif;
-    }
+  <!-- Google Fonts: Syne (display) + JetBrains Mono (mono) + Instrument Sans (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
 
+  <!-- Tailwind config extension -->
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['Syne', 'sans-serif'],
+            mono:    ['JetBrains Mono', 'monospace'],
+            body:    ['Instrument Sans', 'sans-serif'],
+          },
+          colors: {
+            ink:     '#0A0A0F',
+            surface: '#111118',
+            panel:   '#16161F',
+            rail:    '#1E1E2A',
+            border:  '#2A2A38',
+            muted:   '#4A4A62',
+            ghost:   '#6B6B88',
+            text:    '#E8E8F0',
+            dim:     '#9898B0',
+            accent:  '#6C63FF',
+            accentL: '#9B95FF',
+            amber:   '#F59E0B',
+            red:     '#EF4444',
+            green:   '#22C55E',
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    /* ════════════════════════════════════════════════════════
+       BASE & RESET
+    ════════════════════════════════════════════════════════ */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     html, body {
       height: 100%;
-      background: var(--paper);
-      color: var(--ink);
-      font-family: var(--font-body);
-      font-size: 14px;
+      background: #0A0A0F;
+      color: #E8E8F0;
+      font-family: 'Instrument Sans', sans-serif;
+      font-size: 13px;
       overflow: hidden;
+      -webkit-font-smoothing: antialiased;
     }
 
-    /* ── Scrollbar ────────────────────────────────────────── */
-    ::-webkit-scrollbar { width: 5px; }
-    ::-webkit-scrollbar-track { background: var(--cream); }
-    ::-webkit-scrollbar-thumb { background: var(--warm); border-radius: 3px; }
+    /* ════════════════════════════════════════════════════════
+       SCROLLBAR
+    ════════════════════════════════════════════════════════ */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2A2A38; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: #6C63FF; }
 
-    /* ── Layout shell ─────────────────────────────────────── */
-    #shell {
+    /* ════════════════════════════════════════════════════════
+       LAYOUT SHELL — 3-column grid
+    ════════════════════════════════════════════════════════ */
+    #app {
       display: grid;
-      grid-template-columns: 300px 1fr;
-      grid-template-rows: 56px 1fr 36px;
-      height: 100vh;
+      grid-template-columns: 260px 1fr 280px;
+      grid-template-rows: 48px 1fr 28px;
       grid-template-areas:
-        "topbar topbar"
-        "panel  canvas"
-        "footer footer";
+        "topbar  topbar  topbar"
+        "sidebar canvas  props"
+        "statusbar statusbar statusbar";
+      height: 100vh;
+      width: 100vw;
     }
 
-    /* ── Top bar ──────────────────────────────────────────── */
+    /* ════════════════════════════════════════════════════════
+       TOPBAR
+    ════════════════════════════════════════════════════════ */
     #topbar {
       grid-area: topbar;
       display: flex;
       align-items: center;
-      padding: 0 24px;
-      border-bottom: 1.5px solid var(--ink);
-      background: var(--ink);
-      color: var(--paper);
-      gap: 24px;
+      padding: 0 20px;
+      background: #111118;
+      border-bottom: 1px solid #1E1E2A;
+      gap: 0;
+      z-index: 50;
     }
-    .logo {
-      font-family: var(--font-display);
-      font-size: 28px;
-      letter-spacing: 2px;
-      line-height: 1;
-      color: var(--paper);
+
+    .wordmark {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 17px;
+      letter-spacing: -0.02em;
+      color: #E8E8F0;
+      white-space: nowrap;
     }
-    .logo span { color: var(--accent); }
-    .tagline {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: #888;
-      letter-spacing: 1.5px;
+    .wordmark em {
+      font-style: normal;
+      color: #6C63FF;
+    }
+
+    .topbar-sep {
+      width: 1px;
+      height: 20px;
+      background: #2A2A38;
+      margin: 0 16px;
+    }
+
+    .topbar-tag {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      font-weight: 400;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
-      border-left: 1px solid #444;
-      padding-left: 16px;
+      color: #4A4A62;
     }
-    .topbar-right {
-      margin-left: auto;
+
+    /* Toolbar action groups */
+    .toolbar-group {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 2px;
     }
-    .pill {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      padding: 4px 10px;
-      border-radius: 20px;
-      letter-spacing: 0.8px;
-    }
-    .pill-warn  { background: rgba(200, 68, 10, 0.2); color: #FF7B50; border: 1px solid rgba(200, 68, 10, 0.4); }
-    .pill-ok    { background: rgba(50, 180, 100, 0.15); color: #5AC87A; border: 1px solid rgba(50, 180, 100, 0.3); }
-    .pill-idle  { background: rgba(255,255,255,0.05); color: #888; border: 1px solid #333; }
 
-    /* ── Left panel ───────────────────────────────────────── */
-    #panel {
-      grid-area: panel;
-      border-right: 1.5px solid var(--ink);
+    .tool-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 10px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      color: #6B6B88;
+      font-family: 'Instrument Sans', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.12s ease;
+      white-space: nowrap;
+    }
+    .tool-btn:hover:not(:disabled) {
+      background: #1E1E2A;
+      border-color: #2A2A38;
+      color: #E8E8F0;
+    }
+    .tool-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .tool-btn.primary {
+      background: #6C63FF;
+      border-color: #6C63FF;
+      color: #fff;
+    }
+    .tool-btn.primary:hover:not(:disabled) {
+      background: #7C74FF;
+      border-color: #7C74FF;
+    }
+    .tool-btn.danger:hover:not(:disabled) {
+      background: rgba(239,68,68,0.1);
+      border-color: rgba(239,68,68,0.3);
+      color: #EF4444;
+    }
+
+    /* ════════════════════════════════════════════════════════
+       LEFT SIDEBAR — Layers / Blocks
+    ════════════════════════════════════════════════════════ */
+    #sidebar {
+      grid-area: sidebar;
+      background: #111118;
+      border-right: 1px solid #1E1E2A;
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      background: var(--cream);
     }
-    .panel-section {
-      padding: 16px;
-      border-bottom: 1px solid var(--border);
-    }
-    .sec-label {
-      font-family: var(--font-mono);
+
+    .panel-header {
+      padding: 12px 14px 8px;
+      font-family: 'JetBrains Mono', monospace;
       font-size: 9px;
-      letter-spacing: 2px;
+      font-weight: 500;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      color: var(--dim);
-      margin-bottom: 10px;
+      color: #4A4A62;
+      border-bottom: 1px solid #1A1A24;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
 
-    /* ── Upload zone ──────────────────────────────────────── */
-    #drop-zone {
-      border: 1.5px dashed var(--warm);
-      border-radius: 4px;
-      padding: 28px 16px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.15s;
-      background: var(--paper);
+    .panel-header span {
+      background: #1E1E2A;
+      color: #6B6B88;
+      font-size: 9px;
+      padding: 1px 6px;
+      border-radius: 20px;
     }
-    #drop-zone:hover, #drop-zone.drag-over {
-      border-color: var(--accent);
-      background: rgba(200, 68, 10, 0.04);
-    }
-    #drop-zone .icon { font-size: 28px; margin-bottom: 6px; opacity: 0.5; }
-    #drop-zone .hint { font-size: 12px; font-weight: 500; }
-    #drop-zone .sub  { font-family: var(--font-mono); font-size: 10px; color: var(--dim); margin-top: 3px; }
-    #file-input { display: none; }
 
-    /* ── Language selector ────────────────────────────────── */
-    select, input[type="range"] {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      padding: 6px 8px;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: var(--paper);
-      color: var(--ink);
-      width: 100%;
-      outline: none;
-      cursor: pointer;
-      appearance: none;
-    }
-    select:focus { border-color: var(--accent2); }
-
-    /* ── Process button ───────────────────────────────────── */
-    #btn-process {
-      width: 100%;
-      padding: 10px 16px;
-      background: var(--ink);
-      color: var(--paper);
-      border: none;
-      font-family: var(--font-display);
-      font-size: 18px;
-      letter-spacing: 2px;
-      cursor: pointer;
-      border-radius: 3px;
-      transition: all 0.15s;
-      position: relative;
-      overflow: hidden;
-    }
-    #btn-process:hover:not(:disabled) { background: var(--accent); }
-    #btn-process:disabled { opacity: 0.3; cursor: not-allowed; }
-    #btn-process .loader {
-      display: inline-block;
-      width: 14px; height: 14px;
-      border: 2px solid rgba(255,255,255,0.2);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.65s linear infinite;
-      vertical-align: middle;
-      margin-right: 6px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Block list ───────────────────────────────────────── */
-    #block-list {
+    /* Block layer list */
+    #layer-list {
       flex: 1;
       overflow-y: auto;
-      padding: 8px;
+      padding: 6px 8px;
     }
-    .block-card {
-      padding: 8px 10px;
-      border: 1px solid transparent;
-      border-radius: 4px;
-      margin-bottom: 4px;
-      cursor: pointer;
-      transition: all 0.1s;
+
+    .layer-item {
       display: flex;
       align-items: center;
       gap: 8px;
+      padding: 6px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.1s ease;
+      margin-bottom: 2px;
     }
-    .block-card:hover { background: var(--paper); border-color: var(--border); }
-    .block-card.active { background: var(--paper); border-color: var(--accent); }
-    .block-swatch {
-      width: 12px; height: 12px;
+    .layer-item:hover {
+      background: #16161F;
+      border-color: #2A2A38;
+    }
+    .layer-item.active {
+      background: rgba(108, 99, 255, 0.1);
+      border-color: rgba(108, 99, 255, 0.3);
+    }
+
+    .layer-swatch {
+      width: 10px;
+      height: 10px;
       border-radius: 2px;
-      border: 1px solid rgba(0,0,0,0.15);
       flex-shrink: 0;
+      border: 1px solid rgba(255,255,255,0.08);
     }
-    .block-text {
-      font-family: var(--font-mono);
-      font-size: 11px;
+
+    .layer-text {
+      font-size: 11.5px;
+      color: #9898B0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
       flex: 1;
+      line-height: 1.3;
     }
-    .block-meta {
-      font-family: var(--font-mono);
+    .layer-item.active .layer-text { color: #E8E8F0; }
+
+    .layer-meta {
+      font-family: 'JetBrains Mono', monospace;
       font-size: 9px;
-      color: var(--dim);
+      color: #4A4A62;
       white-space: nowrap;
     }
 
-    /* ── Download / reset buttons ──────────────────────────── */
-    .btn-row { display: flex; gap: 6px; }
-    .btn-sm {
-      flex: 1;
-      padding: 7px 8px;
-      font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: 0.5px;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: var(--paper);
-      color: var(--ink);
-      cursor: pointer;
+    /* Empty state */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 10px;
+      padding: 24px;
       text-align: center;
-      transition: all 0.12s;
     }
-    .btn-sm:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-    .btn-sm.accent { background: var(--accent); color: #fff; border-color: var(--accent); }
-    .btn-sm.accent:hover { opacity: 0.85; }
-    .btn-sm:disabled { opacity: 0.3; cursor: not-allowed; }
-
-    /* ── Canvas area ──────────────────────────────────────── */
-    #canvas-area {
-      grid-area: canvas;
+    .empty-icon {
+      width: 44px;
+      height: 44px;
+      background: #16161F;
+      border: 1px solid #2A2A38;
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
+      font-size: 20px;
+    }
+    .empty-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6B6B88;
+    }
+    .empty-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: #3A3A52;
+      line-height: 1.6;
+      letter-spacing: 0.05em;
+    }
+
+    /* Upload button in sidebar */
+    .upload-btn {
+      margin: 10px 8px;
+      padding: 10px 14px;
+      background: #16161F;
+      border: 1.5px dashed #2A2A38;
+      border-radius: 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      color: #6B6B88;
+      font-size: 11.5px;
+      font-weight: 500;
+    }
+    .upload-btn:hover {
+      border-color: #6C63FF;
+      background: rgba(108,99,255,0.05);
+      color: #9B95FF;
+    }
+
+    /* ════════════════════════════════════════════════════════
+       CANVAS AREA
+    ════════════════════════════════════════════════════════ */
+    #canvas-area {
+      grid-area: canvas;
+      position: relative;
       overflow: auto;
       background:
-        radial-gradient(ellipse at 30% 20%, rgba(200,68,10,0.04) 0%, transparent 60%),
-        radial-gradient(ellipse at 70% 80%, rgba(58,95,138,0.05) 0%, transparent 55%),
-        repeating-linear-gradient(0deg, transparent, transparent 23px, var(--border) 23px, var(--border) 24px),
-        repeating-linear-gradient(90deg, transparent, transparent 23px, var(--border) 23px, var(--border) 24px),
-        var(--paper);
-      position: relative;
+        radial-gradient(ellipse 60% 50% at 30% 40%, rgba(108,99,255,0.04) 0%, transparent 70%),
+        radial-gradient(ellipse 40% 60% at 80% 70%, rgba(108,99,255,0.03) 0%, transparent 60%),
+        repeating-conic-gradient(#13131A 0% 25%, #0F0F16 0% 50%) 0 0 / 24px 24px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 32px;
     }
 
-    /* ── Welcome state ────────────────────────────────────── */
-    #welcome {
-      text-align: center;
-      user-select: none;
+    /* Welcome / drop zone shown when no image is loaded */
+    #welcome-drop {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
       pointer-events: none;
     }
-    #welcome .big {
-      font-family: var(--font-display);
-      font-size: 88px;
+    #welcome-drop.drag-over { background: rgba(108,99,255,0.06); }
+
+    .welcome-glyph {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: clamp(60px, 10vw, 120px);
+      letter-spacing: -0.04em;
       line-height: 0.9;
-      letter-spacing: 4px;
-      color: rgba(13,13,13,0.06);
-    }
-    #welcome .sub {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--dim);
-      margin-top: 16px;
-      letter-spacing: 1px;
+      color: rgba(108,99,255,0.06);
+      user-select: none;
+      text-align: center;
     }
 
-    /* ── Image workspace ─────────────────────────────────── */
+    .welcome-cta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: #3A3A52;
+    }
+
+    /* Workspace: the image + overlay container */
     #workspace {
       position: relative;
-      display: none;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.12);
+      display: none;  /* shown after image loads */
+      flex-shrink: 0;
+      /* Dramatic layered shadow for depth */
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.04),
+        0 4px 6px rgba(0,0,0,0.3),
+        0 20px 60px rgba(0,0,0,0.5),
+        0 60px 120px rgba(0,0,0,0.3);
+      border-radius: 3px;
+      overflow: hidden;
     }
+
     #workspace img {
       display: block;
       max-width: 100%;
       height: auto;
       user-select: none;
+      pointer-events: none;
+      /* Ensure image rendered pixels exactly match container */
+      vertical-align: top;
     }
 
-    /* ── Text overlay container ───────────────────────────── */
+    /* Overlay: absolute-positioned typography container */
     #overlay {
       position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      pointer-events: none;     /* pass-through unless a field is targeted */
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;   /* individual text fields re-enable */
     }
 
-    /* ── Editable text fields ─────────────────────────────── */
-    .txt-field {
+    /* ════════════════════════════════════════════════════════
+       EDITABLE TEXT FIELDS
+    ════════════════════════════════════════════════════════ */
+    .txt-block {
       position: absolute;
-      display: flex;
-      align-items: center;
-      line-height: 1.15;
-      white-space: pre;
-      cursor: text;
       pointer-events: all;
+      cursor: text;
+      outline: none;
+      line-height: 1.25;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: hidden;
       border: 1.5px solid transparent;
       border-radius: 2px;
-      padding: 1px 3px;
-      transition: border-color 0.12s, background 0.12s;
-      outline: none;
-      background: transparent;
-      /* text-shadow applied to improve legibility on complex backgrounds */
+      padding: 1px 2px;
+      transition: border-color 0.12s ease, background 0.12s ease;
+      /* Prevent browser adding its own focus ring */
+      -webkit-user-modify: read-write-plaintext-only;
     }
-    .txt-field:hover {
-      border-color: rgba(58, 95, 138, 0.5);
-      background: rgba(58, 95, 138, 0.06);
+    .txt-block:hover {
+      border-color: rgba(108, 99, 255, 0.4);
+      background: rgba(108, 99, 255, 0.04);
     }
-    .txt-field:focus {
-      border-color: var(--accent2);
-      background: rgba(58, 95, 138, 0.1);
+    .txt-block:focus,
+    .txt-block.selected {
+      border-color: #6C63FF;
+      background: rgba(108, 99, 255, 0.08);
       z-index: 10;
     }
-    .txt-field.highlighted {
-      border-color: var(--accent) !important;
-      background: rgba(200, 68, 10, 0.08) !important;
+
+    /* Selection handles shown on active block */
+    .txt-block.selected::before,
+    .txt-block.selected::after {
+      content: '';
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      background: #6C63FF;
+      border: 1px solid #111118;
+      border-radius: 1px;
+    }
+    .txt-block.selected::before { top: -4px; left: -4px; }
+    .txt-block.selected::after  { bottom: -4px; right: -4px; }
+
+    /* ════════════════════════════════════════════════════════
+       RIGHT PROPERTIES PANEL
+    ════════════════════════════════════════════════════════ */
+    #props-panel {
+      grid-area: props;
+      background: #111118;
+      border-left: 1px solid #1E1E2A;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
-    /* ── Export overlay ───────────────────────────────────── */
-    #export-toast {
-      position: fixed;
-      bottom: 50px;
-      left: 50%;
-      transform: translateX(-50%) translateY(20px);
-      background: var(--ink);
-      color: var(--paper);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      padding: 8px 18px;
-      border-radius: 20px;
-      opacity: 0;
-      transition: all 0.25s;
-      pointer-events: none;
-      letter-spacing: 0.5px;
+    .props-section {
+      padding: 14px;
+      border-bottom: 1px solid #1A1A24;
     }
-    #export-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-    /* ── Status bar ───────────────────────────────────────── */
-    #footer {
-      grid-area: footer;
+    .props-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #4A4A62;
+      margin-bottom: 10px;
+    }
+
+    /* Form controls */
+    .field-row {
       display: flex;
       align-items: center;
-      padding: 0 20px;
-      gap: 20px;
-      border-top: 1px solid var(--border);
-      background: var(--cream);
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: var(--dim);
-      letter-spacing: 0.5px;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
     }
-    #footer span { display: flex; align-items: center; gap: 5px; }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
-    .dot.green { background: #5AC87A; }
-    .dot.red   { background: #FF6B6B; }
-    .dot.amber { background: #F0A832; }
+    .field-row:last-child { margin-bottom: 0; }
 
-    /* ── Progress bar ─────────────────────────────────────── */
-    #progress-wrap {
-      position: fixed;
-      top: 56px;
-      left: 300px;
-      right: 0;
-      height: 3px;
-      z-index: 100;
-      display: none;
+    .field-label {
+      font-size: 11px;
+      color: #6B6B88;
+      white-space: nowrap;
+      width: 64px;
+      flex-shrink: 0;
     }
-    #progress-bar {
+
+    .field-input {
+      flex: 1;
+      background: #16161F;
+      border: 1px solid #2A2A38;
+      border-radius: 5px;
+      padding: 5px 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #E8E8F0;
+      outline: none;
+      transition: border-color 0.12s;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .field-input:focus { border-color: #6C63FF; }
+    .field-input:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+
+    select.field-input {
+      cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B6B88' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+    }
+
+    /* Color swatch + input */
+    .color-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+    }
+    .color-swatch {
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.08);
+      cursor: pointer;
+      flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .color-swatch input[type="color"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      width: 100%;
       height: 100%;
-      background: var(--accent);
+      cursor: pointer;
+      border: none;
+      padding: 0;
+    }
+    .color-hex {
+      flex: 1;
+      background: #16161F;
+      border: 1px solid #2A2A38;
+      border-radius: 5px;
+      padding: 5px 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #E8E8F0;
+      outline: none;
+      transition: border-color 0.12s;
+    }
+    .color-hex:focus { border-color: #6C63FF; }
+
+    /* Number stepper */
+    .stepper {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      background: #16161F;
+      border: 1px solid #2A2A38;
+      border-radius: 5px;
+      overflow: hidden;
+      flex: 1;
+    }
+    .stepper input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 5px 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #E8E8F0;
+      outline: none;
+      text-align: center;
+      width: 0;       /* let flex handle sizing */
+      min-width: 0;
+    }
+    /* Remove default number spinners */
+    .stepper input::-webkit-inner-spin-button,
+    .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; }
+    .stepper input[type=number] { -moz-appearance: textfield; }
+
+    .step-btn {
+      width: 22px;
+      height: 100%;
+      background: transparent;
+      border: none;
+      color: #4A4A62;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.1s;
+      border-right: 1px solid #2A2A38;
+      padding: 4px;
+    }
+    .step-btn:last-child { border-right: none; border-left: 1px solid #2A2A38; }
+    .step-btn:hover { background: #1E1E2A; color: #E8E8F0; }
+    .step-btn:disabled { opacity: 0.2; cursor: not-allowed; }
+
+    /* Apply button */
+    .apply-btn {
+      width: 100%;
+      padding: 8px 12px;
+      background: rgba(108,99,255,0.12);
+      border: 1px solid rgba(108,99,255,0.25);
+      border-radius: 5px;
+      color: #9B95FF;
+      font-family: 'Instrument Sans', sans-serif;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.12s;
+      margin-top: 10px;
+      letter-spacing: 0.02em;
+    }
+    .apply-btn:hover:not(:disabled) {
+      background: rgba(108,99,255,0.2);
+      border-color: #6C63FF;
+      color: #fff;
+    }
+    .apply-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+
+    /* Coordinates display (read-only) */
+    .coord-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+    .coord-cell {
+      background: #16161F;
+      border: 1px solid #1E1E2A;
+      border-radius: 5px;
+      padding: 6px 8px;
+    }
+    .coord-key {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px;
+      color: #4A4A62;
+      letter-spacing: 0.08em;
+      margin-bottom: 2px;
+    }
+    .coord-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #9898B0;
+    }
+
+    /* ════════════════════════════════════════════════════════
+       STATUS BAR
+    ════════════════════════════════════════════════════════ */
+    #statusbar {
+      grid-area: statusbar;
+      background: #0D0D14;
+      border-top: 1px solid #1A1A24;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9.5px;
+      color: #4A4A62;
+      letter-spacing: 0.05em;
+    }
+    .status-item { display: flex; align-items: center; gap: 5px; }
+    .status-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #4A4A62;
+    }
+    .status-dot.green { background: #22C55E; }
+    .status-dot.amber { background: #F59E0B; }
+    .status-dot.red   { background: #EF4444; }
+    .status-dot.purple { background: #6C63FF; }
+
+    /* ════════════════════════════════════════════════════════
+       PROGRESS BAR (top of canvas area, shown during processing)
+    ════════════════════════════════════════════════════════ */
+    #progress-track {
+      position: fixed;
+      top: 48px;
+      left: 260px;
+      right: 280px;
+      height: 2px;
+      z-index: 200;
+      display: none;
+      background: #1E1E2A;
+    }
+    #progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #6C63FF, #9B95FF);
       width: 0%;
       transition: width 0.3s ease;
     }
 
-    /* ── Tooltip ──────────────────────────────────────────── */
-    .tip {
-      font-family: var(--font-mono);
-      font-size: 9px;
-      color: var(--dim);
-      line-height: 1.5;
+    /* ════════════════════════════════════════════════════════
+       TOAST NOTIFICATIONS
+    ════════════════════════════════════════════════════════ */
+    #toast-container {
+      position: fixed;
+      bottom: 48px;
+      right: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    .toast {
+      background: #1E1E2A;
+      border: 1px solid #2A2A38;
+      border-radius: 7px;
+      padding: 9px 14px;
+      font-size: 12px;
+      color: #E8E8F0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transform: translateX(120%);
+      opacity: 0;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      max-width: 300px;
+    }
+    .toast.show { transform: translateX(0); opacity: 1; }
+    .toast-icon { font-size: 14px; flex-shrink: 0; }
+    .toast.success { border-left: 3px solid #22C55E; }
+    .toast.error   { border-left: 3px solid #EF4444; }
+    .toast.info    { border-left: 3px solid #6C63FF; }
+
+    /* ════════════════════════════════════════════════════════
+       LOAD JSON MODAL
+    ════════════════════════════════════════════════════════ */
+    #modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      z-index: 500;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+    }
+    #modal-overlay.open {
+      opacity: 1;
+      pointer-events: all;
+    }
+    .modal {
+      background: #16161F;
+      border: 1px solid #2A2A38;
+      border-radius: 12px;
+      width: 560px;
+      max-width: 90vw;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+      overflow: hidden;
+    }
+    .modal-head {
+      padding: 16px 20px;
+      border-bottom: 1px solid #2A2A38;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .modal-title {
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 15px;
+      color: #E8E8F0;
+    }
+    .modal-close {
+      width: 26px;
+      height: 26px;
+      background: #1E1E2A;
+      border: 1px solid #2A2A38;
+      border-radius: 5px;
+      cursor: pointer;
+      color: #6B6B88;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.1s;
+    }
+    .modal-close:hover { background: #2A2A38; color: #E8E8F0; }
+    .modal-body { padding: 20px; }
+    .modal-footer {
+      padding: 14px 20px;
+      border-top: 1px solid #1A1A24;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .modal-textarea {
+      width: 100%;
+      height: 200px;
+      background: #0A0A0F;
+      border: 1px solid #2A2A38;
+      border-radius: 7px;
+      padding: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #E8E8F0;
+      resize: vertical;
+      outline: none;
+      line-height: 1.6;
+    }
+    .modal-textarea:focus { border-color: #6C63FF; }
+    .modal-hint {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9.5px;
+      color: #4A4A62;
+      margin-top: 8px;
+      line-height: 1.6;
     }
 
-    /* ── Animations ───────────────────────────────────────── */
-    @keyframes fadeSlideIn {
-      from { opacity: 0; transform: translateY(6px); }
+    /* Tab switcher inside modal */
+    .tab-row {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 14px;
+      background: #0A0A0F;
+      padding: 3px;
+      border-radius: 7px;
+      border: 1px solid #1E1E2A;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 6px 10px;
+      text-align: center;
+      border-radius: 5px;
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      color: #6B6B88;
+      transition: all 0.12s;
+    }
+    .tab-btn.active {
+      background: #1E1E2A;
+      color: #E8E8F0;
+    }
+
+    /* Drop zone inside modal */
+    #modal-drop-zone {
+      border: 1.5px dashed #2A2A38;
+      border-radius: 8px;
+      padding: 32px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s;
+      background: #0A0A0F;
+    }
+    #modal-drop-zone:hover,
+    #modal-drop-zone.drag-over {
+      border-color: #6C63FF;
+      background: rgba(108,99,255,0.04);
+    }
+    .drop-icon { font-size: 28px; margin-bottom: 8px; opacity: 0.4; }
+    .drop-text {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6B6B88;
+      margin-bottom: 4px;
+    }
+    .drop-sub {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9.5px;
+      color: #3A3A52;
+    }
+
+    /* ════════════════════════════════════════════════════════
+       MISC UTILITIES
+    ════════════════════════════════════════════════════════ */
+    .hidden  { display: none !important; }
+    .divider { height: 1px; background: #1A1A24; margin: 0 8px; }
+
+    /* Hover tooltip */
+    [data-tip] {
+      position: relative;
+    }
+    [data-tip]:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1E1E2A;
+      border: 1px solid #2A2A38;
+      color: #E8E8F0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9.5px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 100;
+      letter-spacing: 0.04em;
+    }
+
+    /* Loading spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block;
+      width: 13px;
+      height: 13px;
+      border: 2px solid rgba(255,255,255,0.15);
+      border-top-color: #9B95FF;
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+      vertical-align: middle;
+    }
+
+    /* Fade-in animation for layer items */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(5px); }
       to   { opacity: 1; transform: translateY(0); }
     }
-    .block-card { animation: fadeSlideIn 0.2s ease both; }
+    .layer-item { animation: fadeUp 0.15s ease both; }
   </style>
 </head>
+
 <body>
 
-<div id="shell">
+<div id="app">
 
-  <!-- ████  TOP BAR  ████ -->
+  <!-- ═══════════════════════════════ TOP BAR ═══════════════════════════════ -->
   <header id="topbar">
-    <div class="logo">PIXEL<span>SCRIBE</span></div>
-    <div class="tagline">offline · content-aware · text editor</div>
-    <div class="topbar-right">
-      <div class="pill pill-idle" id="server-pill">⬤ connecting…</div>
+
+    <!-- Logo -->
+    <div class="wordmark">PIXEL<em>SCRIBE</em></div>
+    <div class="topbar-sep"></div>
+    <div class="topbar-tag">content-aware editor</div>
+
+    <div class="topbar-sep"></div>
+
+    <!-- File actions -->
+    <div class="toolbar-group">
+      <button class="tool-btn" id="btn-open" data-tip="Load JSON payload or image" onclick="openModal()">
+        <svg width="13" height="13" fill="none" viewBox="0 0 16 16"><path d="M2 4a1 1 0 011-1h3l1.5 2H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" stroke-width="1.4"/></svg>
+        Open
+      </button>
     </div>
+
+    <div class="topbar-sep"></div>
+
+    <!-- Edit actions -->
+    <div class="toolbar-group">
+      <button class="tool-btn" id="btn-undo" disabled data-tip="Undo last text change (Ctrl+Z)" onclick="EditorState.undo()">
+        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M3 7l3-3-3-3M3 7h6a4 4 0 010 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Undo
+      </button>
+      <button class="tool-btn" id="btn-redo" disabled data-tip="Redo (Ctrl+Shift+Z)" onclick="EditorState.redo()">
+        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M13 7l-3-3 3-3M13 7H7a4 4 0 000 8h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Redo
+      </button>
+    </div>
+
+    <div class="topbar-sep"></div>
+
+    <!-- Zoom -->
+    <div class="toolbar-group">
+      <button class="tool-btn" data-tip="Zoom out" onclick="CanvasView.zoom(-0.1)">
+        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M4 7h6M12 12l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+      <span id="zoom-label" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#6B6B88;padding:0 4px;min-width:38px;text-align:center;">100%</span>
+      <button class="tool-btn" data-tip="Zoom in" onclick="CanvasView.zoom(0.1)">
+        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M7 4v6M4 7h6M12 12l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+      <button class="tool-btn" data-tip="Fit to window" onclick="CanvasView.fitToWindow()">Fit</button>
+    </div>
+
+    <!-- Spacer -->
+    <div style="flex:1"></div>
+
+    <!-- Right actions -->
+    <div class="toolbar-group">
+      <button class="tool-btn danger" id="btn-reset" disabled data-tip="Reset all edits" onclick="resetAll()">
+        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M3 8A5 5 0 1113 8M3 8l-2-2m2 2l2-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Reset
+      </button>
+      <div class="topbar-sep"></div>
+      <button class="tool-btn primary" id="btn-export" disabled data-tip="Flatten & download composite PNG" onclick="ExportEngine.download()">
+        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M8 3v7M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Export PNG
+      </button>
+    </div>
+
   </header>
 
-  <!-- ████  LEFT PANEL  ████ -->
-  <aside id="panel">
+  <!-- ═══════════════════════════════ LEFT SIDEBAR ═══════════════════════════ -->
+  <aside id="sidebar">
 
-    <!-- Upload -->
-    <div class="panel-section">
-      <div class="sec-label">01 — Source Image</div>
-      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
-        <input type="file" id="file-input" accept="image/*" />
-        <div class="icon">⬆</div>
-        <div class="hint">Drop or click to upload</div>
-        <div class="sub">JPG · PNG · WEBP · BMP (max 30 MB)</div>
+    <div class="panel-header">
+      <span style="color:#6B6B88;letter-spacing:0.12em;">LAYERS</span>
+      <span id="layer-count">0</span>
+    </div>
+
+    <div id="layer-list">
+      <div class="empty-state" id="empty-state">
+        <div class="empty-icon">⬚</div>
+        <div class="empty-title">No blocks loaded</div>
+        <div class="empty-sub">Open a JSON payload or<br>drag an image to begin</div>
       </div>
     </div>
 
-    <!-- Config -->
-    <div class="panel-section">
-      <div class="sec-label">02 — OCR Config</div>
+    <div class="divider"></div>
 
-      <div style="margin-bottom:10px;">
-        <label class="tip" style="display:block; margin-bottom:5px;">Language</label>
-        <select id="lang-select">
-          <option value="en">English</option>
-          <option value="fr">French</option>
-          <option value="de">German</option>
-          <option value="es">Spanish</option>
-          <option value="zh">Chinese (Simplified)</option>
-          <option value="ja">Japanese</option>
-          <option value="ko">Korean</option>
-          <option value="ar">Arabic</option>
-          <option value="ru">Russian</option>
-          <option value="en,fr">English + French</option>
-          <option value="en,de">English + German</option>
-          <option value="en,es">English + Spanish</option>
+    <!-- Quick upload trigger -->
+    <div class="upload-btn" onclick="openModal()" id="sidebar-upload-btn">
+      <div style="font-size:18px;margin-bottom:4px;opacity:0.4;">⊕</div>
+      <div>Open file or paste JSON</div>
+    </div>
+
+  </aside>
+
+  <!-- ═══════════════════════════════ CANVAS AREA ════════════════════════════ -->
+  <main id="canvas-area" ondragover="handleDragOver(event)" ondrop="handleFileDrop(event)" ondragleave="handleDragLeave()">
+
+    <!-- Welcome overlay -->
+    <div id="welcome-drop">
+      <div class="welcome-glyph">EDIT<br>TEXT</div>
+      <div class="welcome-cta">Open JSON payload · Drag image · Press Ctrl+O</div>
+    </div>
+
+    <!-- The editable workspace -->
+    <div id="workspace">
+      <img id="canvas-img" src="" alt="" />
+      <div id="overlay"></div>
+    </div>
+
+  </main>
+
+  <!-- ═══════════════════════════════ RIGHT PROPS PANEL ══════════════════════ -->
+  <aside id="props-panel">
+
+    <!-- Typography -->
+    <div class="props-section">
+      <div class="props-label">Typography</div>
+
+      <div class="field-row">
+        <span class="field-label">Font</span>
+        <select class="field-input" id="prop-font" disabled onchange="PropsPanel.applyFont()">
+          <option value="Arial">Arial</option>
+          <option value="Times New Roman">Times New Roman</option>
+          <option value="Courier New">Courier New</option>
+          <option value="Calibri">Calibri</option>
+          <option value="Georgia">Georgia</option>
+          <option value="Verdana">Verdana</option>
+          <option value="Helvetica">Helvetica</option>
+          <option value="system-ui">System UI</option>
         </select>
       </div>
 
-      <div style="margin-bottom:10px;">
-        <label class="tip" style="display:block; margin-bottom:5px;">
-          Min Confidence: <strong id="conf-val">25%</strong>
-        </label>
-        <input type="range" id="conf-slider" min="5" max="90" value="25" step="5" />
+      <div class="field-row">
+        <span class="field-label">Size</span>
+        <div class="stepper" id="stepper-size">
+          <button class="step-btn" onclick="PropsPanel.stepSize(-1)" disabled>−</button>
+          <input type="number" id="prop-size" value="16" min="4" max="200" disabled
+                 onchange="PropsPanel.applySize()" onkeydown="if(event.key==='Enter')PropsPanel.applySize()" />
+          <button class="step-btn" onclick="PropsPanel.stepSize(1)" disabled>+</button>
+        </div>
       </div>
 
-      <button id="btn-process" disabled>PROCESS IMAGE</button>
+      <div class="field-row">
+        <span class="field-label">Color</span>
+        <div class="color-wrap">
+          <div class="color-swatch" id="swatch-fg" style="background:#E8E8F0">
+            <input type="color" id="prop-color" value="#E8E8F0" disabled onchange="PropsPanel.applyColor()" />
+          </div>
+          <input class="color-hex" type="text" id="prop-color-hex" value="#E8E8F0" maxlength="7" disabled
+                 onchange="PropsPanel.applyColorHex()" />
+        </div>
+      </div>
 
-      <div class="tip" style="margin-top:8px; text-align:center;">
-        Extracts text · erases originals · overlays editable fields
+      <button class="apply-btn" id="btn-apply-all" disabled onclick="PropsPanel.applyAll()">
+        Apply to Selected Block
+      </button>
+    </div>
+
+    <!-- Block coordinates (read-only) -->
+    <div class="props-section">
+      <div class="props-label">Block Coordinates</div>
+      <div class="coord-grid">
+        <div class="coord-cell">
+          <div class="coord-key">X PX</div>
+          <div class="coord-val" id="coord-x">—</div>
+        </div>
+        <div class="coord-cell">
+          <div class="coord-key">Y PX</div>
+          <div class="coord-val" id="coord-y">—</div>
+        </div>
+        <div class="coord-cell">
+          <div class="coord-key">WIDTH</div>
+          <div class="coord-val" id="coord-w">—</div>
+        </div>
+        <div class="coord-cell">
+          <div class="coord-key">HEIGHT</div>
+          <div class="coord-val" id="coord-h">—</div>
+        </div>
       </div>
     </div>
 
-    <!-- Block list -->
-    <div class="panel-section" style="padding-bottom:8px;">
-      <div class="sec-label" style="margin-bottom:0; display:flex; justify-content:space-between; align-items:center;">
-        <span>03 — Text Blocks</span>
-        <span id="block-count" style="color:var(--ink);">—</span>
+    <!-- Block info -->
+    <div class="props-section">
+      <div class="props-label">Block Info</div>
+      <div class="field-row">
+        <span class="field-label">Detected</span>
+        <span class="field-input" id="info-original" style="background:transparent;border-color:transparent;color:#6B6B88;font-size:10.5px;padding:4px 0;">—</span>
       </div>
-    </div>
-    <div id="block-list">
-      <div style="text-align:center; padding:24px 8px; font-family:var(--font-mono); font-size:10px; color:var(--dim);">
-        Upload an image to begin
+      <div class="field-row">
+        <span class="field-label">Confidence</span>
+        <span id="info-conf" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#6B6B88;">—</span>
       </div>
     </div>
 
-    <!-- Actions -->
-    <div class="panel-section">
-      <div class="sec-label">04 — Export</div>
-      <div class="btn-row">
-        <button class="btn-sm accent" id="btn-export" disabled onclick="exportComposite()">
-          ↓ Export PNG
-        </button>
-        <button class="btn-sm" id="btn-reset" onclick="resetAll()">
-          ↺ Reset
-        </button>
+    <!-- Export section -->
+    <div class="props-section" style="margin-top:auto;">
+      <div class="props-label">Export</div>
+      <button class="tool-btn primary" id="btn-export-2" style="width:100%;justify-content:center;height:36px;"
+              disabled onclick="ExportEngine.download()">
+        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M8 3v7M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Flatten & Download PNG
+      </button>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#3A3A52;margin-top:8px;line-height:1.6;text-align:center;">
+        Renders composite at full<br>source resolution. No server calls.
       </div>
     </div>
 
   </aside>
 
-  <!-- ████  CANVAS AREA  ████ -->
-  <main id="canvas-area">
-    <div id="welcome">
-      <div class="big">EDIT<br/>TEXT</div>
-      <div class="sub">upload an image → run OCR → edit inline</div>
+  <!-- ═══════════════════════════════ STATUS BAR ═══════════════════════════════ -->
+  <div id="statusbar">
+    <div class="status-item">
+      <div class="status-dot" id="dot-backend"></div>
+      <span id="label-backend">No image loaded</span>
     </div>
-
-    <div id="workspace">
-      <img id="canvas-img" src="" alt="cleaned background" />
-      <div id="overlay"></div>
+    <div class="status-item">
+      <div class="status-dot"></div>
+      <span id="label-dimensions">—</span>
     </div>
-  </main>
-
-  <!-- ████  FOOTER STATUS  ████ -->
-  <footer id="footer">
-    <span><div class="dot" id="status-dot"></div><span id="status-text">Idle</span></span>
-    <span id="img-size">—</span>
-    <span id="block-info">—</span>
-    <span style="margin-left:auto;">PixelScribe v1.0 · Offline · No cloud APIs</span>
-  </footer>
+    <div class="status-item">
+      <div class="status-dot"></div>
+      <span id="label-blocks">0 blocks</span>
+    </div>
+    <div class="status-item" style="margin-left:auto">
+      <div class="status-dot"></div>
+      <span>PixelScribe v2 · Offline · No cloud APIs</span>
+    </div>
+  </div>
 
 </div>
 
-<!-- Progress bar -->
-<div id="progress-wrap"><div id="progress-bar"></div></div>
-
-<!-- Toast -->
-<div id="export-toast">Exported to Downloads ✓</div>
-
-<!-- ████████████████████████████████████████████████████████████
-     JAVASCRIPT
-████████████████████████████████████████████████████████████ -->
-<script>
-/* ─────────────────────────────────────────────────────────────────
-   Config
-───────────────────────────────────────────────────────────────── */
-const API_BASE = 'http://localhost:8000';
-
-/* ─────────────────────────────────────────────────────────────────
-   State
-───────────────────────────────────────────────────────────────── */
-let state = {
-  file:       null,
-  imageW:     0,
-  imageH:     0,
-  blocks:     [],       // raw from API
-  scaleFactor:1,        // rendered-px / native-px ratio
-  activeId:   null,
-  cleanB64:   null,     // base64 of inpainted image
-};
-
-/* ─────────────────────────────────────────────────────────────────
-   DOM shortcuts
-───────────────────────────────────────────────────────────────── */
-const $  = id => document.getElementById(id);
-const el = (tag, cls='', txt='') => {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  if (txt) e.textContent = txt;
-  return e;
-};
-
-/* ─────────────────────────────────────────────────────────────────
-   Server health check
-───────────────────────────────────────────────────────────────── */
-async function checkServer() {
-  try {
-    const r = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3000) });
-    if (r.ok) {
-      setPill('ok', '⬤ server ready');
-      return true;
-    }
-  } catch(_) {}
-  setPill('warn', '⬤ server offline');
-  return false;
-}
-
-function setPill(type, text) {
-  const p = $('server-pill');
-  p.className = `pill pill-${type}`;
-  p.textContent = text;
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Confidence slider
-───────────────────────────────────────────────────────────────── */
-$('conf-slider').addEventListener('input', e => {
-  $('conf-val').textContent = e.target.value + '%';
-});
-
-/* ─────────────────────────────────────────────────────────────────
-   File upload — drop zone + input
-───────────────────────────────────────────────────────────────── */
-const dropZone = $('drop-zone');
-const fileInput = $('file-input');
-
-dropZone.addEventListener('dragover', e => {
-  e.preventDefault();
-  dropZone.classList.add('drag-over');
-});
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropZone.classList.remove('drag-over');
-  const f = e.dataTransfer.files[0];
-  if (f && f.type.startsWith('image/')) setFile(f);
-});
-fileInput.addEventListener('change', e => {
-  if (e.target.files[0]) setFile(e.target.files[0]);
-});
-
-function setFile(file) {
-  state.file = file;
-  dropZone.querySelector('.hint').textContent = file.name;
-  dropZone.querySelector('.sub').textContent =
-    `${(file.size / 1024).toFixed(0)} KB — click to change`;
-  $('btn-process').disabled = false;
-  setStatus('idle', `File loaded: ${file.name}`);
-  $('img-size').textContent = `File: ${(file.size/1024).toFixed(0)} KB`;
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Status bar helpers
-───────────────────────────────────────────────────────────────── */
-function setStatus(type, msg) {
-  const dot = $('status-dot');
-  dot.className = 'dot' + (type === 'ok' ? ' green' : type === 'error' ? ' red' : type === 'busy' ? ' amber' : '');
-  $('status-text').textContent = msg;
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Progress bar animation
-───────────────────────────────────────────────────────────────── */
-let _progTimer = null;
-function showProgress(pct) {
-  $('progress-wrap').style.display = 'block';
-  $('progress-bar').style.width = pct + '%';
-}
-function hideProgress() {
-  showProgress(100);
-  setTimeout(() => {
-    $('progress-wrap').style.display = 'none';
-    $('progress-bar').style.width = '0%';
-  }, 400);
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Main: process image
-───────────────────────────────────────────────────────────────── */
-$('btn-process').addEventListener('click', processImage);
-
-async function processImage() {
-  if (!state.file) return;
-
-  const btn = $('btn-process');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="loader"></span>PROCESSING…';
-  setStatus('busy', 'Running OCR + inpainting…');
-  showProgress(10);
-  setPill('warn', '⬤ processing…');
-
-  try {
-    const fd = new FormData();
-    fd.append('file', state.file);
-    fd.append('languages', $('lang-select').value);
-    fd.append('confidence', ($('conf-slider').value / 100).toString());
-
-    showProgress(20);
-
-    const res = await fetch(`${API_BASE}/process-image`, {
-      method: 'POST',
-      body: fd,
-    });
-
-    showProgress(80);
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Server error ${res.status}: ${err}`);
-    }
-
-    const data = await res.json();
-    showProgress(95);
-
-    // Store state
-    state.cleanB64 = data.image_b64;
-    state.imageW   = data.image_w;
-    state.imageH   = data.image_h;
-    state.blocks   = data.blocks;
-
-    // Render
-    renderWorkspace(data);
-    populateBlockList(data.blocks);
-
-    hideProgress();
-    setStatus('ok', `Done — ${data.blocks.length} text block(s) found`);
-    setPill('ok', '⬤ server ready');
-    $('btn-export').disabled = false;
-
-  } catch (err) {
-    hideProgress();
-    setStatus('error', 'Error: ' + err.message);
-    setPill('ok', '⬤ server ready');
-    console.error(err);
-    alert('Processing failed:\n' + err.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'PROCESS IMAGE';
-  }
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Render workspace: cleaned image + text overlays
-───────────────────────────────────────────────────────────────── */
-function renderWorkspace(data) {
-  const workspace = $('workspace');
-  const img       = $('canvas-img');
-  const overlay   = $('overlay');
-
-  // Show workspace, hide welcome
-  $('welcome').style.display = 'none';
-  workspace.style.display = 'inline-block';
-
-  // Set image source (base64 PNG)
-  img.src = data.image_b64;
-
-  // Once image loads, compute scale and place fields
-  img.onload = () => {
-    const rect = img.getBoundingClientRect();
-    state.scaleFactor = rect.width / data.image_w;
-    placeOverlays(data.blocks, overlay);
-
-    $('img-size').textContent = `${data.image_w}×${data.image_h}px`;
-    $('block-info').textContent = `${data.blocks.length} text block(s)`;
-  };
-
-  // Handle window resize — reposition overlays
-  window.addEventListener('resize', debounce(() => {
-    if (!state.blocks.length) return;
-    const rect = img.getBoundingClientRect();
-    state.scaleFactor = rect.width / state.imageW;
-    placeOverlays(state.blocks, overlay);
-  }, 200));
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Place editable overlays
-───────────────────────────────────────────────────────────────── */
-function placeOverlays(blocks, container) {
-  container.innerHTML = '';
-  const s = state.scaleFactor;
-
-  blocks.forEach(block => {
-    /**
-     * Each text block gets a contenteditable div absolutely positioned
-     * over the cleaned image, styled to match the extracted color + size.
-     */
-    const field = document.createElement('div');
-    field.contentEditable = 'true';
-    field.className = 'txt-field';
-    field.id = 'field-' + block.id;
-    field.dataset.blockId = block.id;
-    field.textContent = block.text;
-    field.spellcheck = false;
-    field.autocomplete = 'off';
-
-    // ── Position & size ──
-    field.style.left     = Math.round(block.x * s) + 'px';
-    field.style.top      = Math.round(block.y * s) + 'px';
-    field.style.width    = Math.round(block.w * s) + 'px';
-    field.style.minHeight= Math.round(block.h * s) + 'px';
-
-    // ── Typography — match extracted style ──
-    field.style.fontSize   = Math.round(block.size * s) + 'px';
-    field.style.color      = block.color;
-    field.style.fontFamily = 'inherit';   // browser default; no forced font
-
-    // Subtle text shadow for legibility on any background
-    const shadow = hexToRgb(block.bg_color);
-    if (shadow) {
-      field.style.textShadow =
-        `0 0 4px rgba(${shadow.r},${shadow.g},${shadow.b},0.6),` +
-        `1px 1px 0 rgba(${shadow.r},${shadow.g},${shadow.b},0.4)`;
-    }
-
-    // ── Events ──
-    field.addEventListener('focus', () => {
-      setActiveBlock(block.id);
-    });
-    field.addEventListener('blur', () => {
-      state.activeId = null;
-    });
-    // Select all on first click for easy replacement
-    field.addEventListener('click', function(e) {
-      if (!this._clicked) {
-        this._clicked = true;
-        selectAll(this);
-        setTimeout(() => { this._clicked = false; }, 600);
-      }
-    });
-
-    container.appendChild(field);
-  });
-}
-
-function selectAll(el) {
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
-}
-
-function hexToRgb(hex) {
-  const m = hex.replace('#','').match(/.{2}/g);
-  if (!m) return null;
-  return { r: parseInt(m[0],16), g: parseInt(m[1],16), b: parseInt(m[2],16) };
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Block list in the panel
-───────────────────────────────────────────────────────────────── */
-function populateBlockList(blocks) {
-  const list = $('block-list');
-  list.innerHTML = '';
-  $('block-count').textContent = blocks.length;
-
-  if (!blocks.length) {
-    list.innerHTML = `<div style="text-align:center; padding:20px 8px; font-family:var(--font-mono); font-size:10px; color:var(--dim);">No text detected.<br>Try lowering the confidence threshold.</div>`;
-    return;
-  }
-
-  blocks.forEach((block, i) => {
-    const card = el('div', 'block-card');
-    card.style.animationDelay = (i * 25) + 'ms';
-    card.dataset.blockId = block.id;
-
-    const swatch = el('div', 'block-swatch');
-    swatch.style.background = block.color;
-
-    const text = el('div', 'block-text');
-    text.textContent = `"${block.text}"`;
-
-    const meta = el('div', 'block-meta');
-    meta.textContent = `${block.size}px · ${Math.round(block.confidence * 100)}%`;
-
-    card.append(swatch, text, meta);
-    card.addEventListener('click', () => {
-      setActiveBlock(block.id);
-      const field = document.getElementById('field-' + block.id);
-      if (field) {
-        field.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        field.focus();
-        selectAll(field);
-      }
-    });
-
-    list.appendChild(card);
-  });
-}
-
-function setActiveBlock(id) {
-  state.activeId = id;
-
-  // Highlight card
-  document.querySelectorAll('.block-card').forEach(c => {
-    c.classList.toggle('active', c.dataset.blockId === id);
-  });
-
-  // Highlight field
-  document.querySelectorAll('.txt-field').forEach(f => {
-    f.classList.toggle('highlighted', f.dataset.blockId === id);
-  });
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Export composite — draw cleaned image + overlay text onto canvas
-───────────────────────────────────────────────────────────────── */
-function exportComposite() {
-  if (!state.cleanB64) return;
-
-  const exportCanvas = document.createElement('canvas');
-  exportCanvas.width  = state.imageW;
-  exportCanvas.height = state.imageH;
-  const ctx = exportCanvas.getContext('2d');
-
-  // Draw inpainted background
-  const bgImg = new Image();
-  bgImg.onload = () => {
-    ctx.drawImage(bgImg, 0, 0, state.imageW, state.imageH);
-
-    // Draw each editable field's current text
-    const s = 1 / state.scaleFactor;   // screen→native scale
-
-    document.querySelectorAll('.txt-field').forEach(field => {
-      const blockId = field.dataset.blockId;
-      const block = state.blocks.find(b => b.id === blockId);
-      if (!block) return;
-
-      const text = field.textContent;
-      if (!text) return;
-
-      // Parse screen-space position back to native pixels
-      const left = parseInt(field.style.left) * s;
-      const top  = parseInt(field.style.top)  * s;
-      const w    = parseInt(field.style.width) * s;
-      const h    = parseInt(field.style.minHeight) * s;
-
-      // Text styling
-      const fontSize = block.size;
-      ctx.font      = `${fontSize}px sans-serif`;
-      ctx.fillStyle = block.color;
-
-      // Background rectangle behind text (bg_color)
-      ctx.fillStyle = block.bg_color;
-      ctx.fillRect(left, top, w, h);
-
-      // Render text
-      ctx.fillStyle = block.color;
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, left + 3, top + h / 2, w - 6);
-    });
-
-    // Download
-    const link = document.createElement('a');
-    link.download = 'pixelscribe-export.png';
-    link.href = exportCanvas.toDataURL('image/png');
-    link.click();
-
-    // Toast
-    const toast = $('export-toast');
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 2800);
-  };
-  bgImg.src = state.cleanB64;
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Reset
-───────────────────────────────────────────────────────────────── */
-function resetAll() {
-  state = { file:null, imageW:0, imageH:0, blocks:[], scaleFactor:1, activeId:null, cleanB64:null };
-  $('canvas-img').src = '';
-  $('overlay').innerHTML = '';
-  $('workspace').style.display = 'none';
-  $('welcome').style.display = 'block';
-  $('block-list').innerHTML = `<div style="text-align:center; padding:24px 8px; font-family:var(--font-mono); font-size:10px; color:var(--dim);">Upload an image to begin</div>`;
-  $('block-count').textContent = '—';
-  $('block-info').textContent = '—';
-  $('img-size').textContent = '—';
-  $('btn-export').disabled = true;
-  $('btn-process').disabled = true;
-  dropZone.querySelector('.hint').textContent = 'Drop or click to upload';
-  dropZone.querySelector('.sub').textContent = 'JPG · PNG · WEBP · BMP (max 30 MB)';
-  $('file-input').value = '';
-  setStatus('idle', 'Idle');
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Utility: debounce
-───────────────────────────────────────────────────────────────── */
-function debounce(fn, ms) {
-  let timer;
-  return (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), ms);
-  };
-}
-
-/* ─────────────────────────────────────────────────────────────────
-   Boot
-───────────────────────────────────────────────────────────────── */
-(async () => {
-  const ok = await checkServer();
-  setStatus(ok ? 'idle' : 'error', ok ? 'Idle' : 'Backend offline — start the server');
-})();
-</script>
+<!-- ═══════════════════════ PROGRESS BAR ═════════════════════════ -->
+<div id="progress-track"><div id="progress-fill"></div></div>
+
+<!-- ═══════════════════════ TOAST CONTAINER ══════════════════════ -->
+<div id="toast-container"></div>
+
+<!-- ════════════════════ LOAD / PASTE MODAL ══════════════════════ -->
+<div id="modal-overlay" onclick="if(event.target===this) closeModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Open Source</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <!-- Tab selector -->
+      <div class="tab-row">
+        <button class="tab-btn active" id="tab-json" onclick="switchTab('json')">Paste JSON</button>
+        <button class="tab-btn" id="tab-image" onclick="switchTab('image')">Image + JSON file</button>
+        <button class="tab-btn" id="tab-url" onclick="switchTab('url')">Image URL</button>
+      </div>
+
+      <!-- Tab: Paste JSON -->
+      <div id="pane-json">
+        <textarea class="modal-textarea" id="json-input"
+          placeholder='{&#10;  "bg_image": "/results/cleaned_job123.jpg",&#10;  "image_w": 2400,&#10;  "image_h": 3000,&#10;  "blocks": [&#10;    { "text": "Hello", "x": 100, "y": 80, "w": 200, "h": 40, "color": "#1A1A1A", "size": 18, "font_family": "Arial" }&#10;  ]&#10;}'></textarea>
+        <div class="modal-hint">
+          Paste the full JSON payload from the worker pipeline.<br>
+          The <code style="color:#9B95FF;">bg_image</code> URL will be fetched from your local backend server.
+        </div>
+      </div>
+
+      <!-- Tab: Image + JSON file -->
+      <div id="pane-image" class="hidden">
+        <div id="modal-drop-zone"
+             onclick="document.getElementById('file-img-input').click()"
+             ondragover="event.preventDefault();this.classList.add('drag-over')"
+             ondrop="handleModalDrop(event)"
+             ondragleave="this.classList.remove('drag-over')">
+          <input type="file" id="file-img-input" accept="image/*,.json" multiple
+                 style="display:none" onchange="handleModalFileInput(event)" />
+          <div class="drop-icon">⬆</div>
+          <div class="drop-text">Drop image or JSON file here</div>
+          <div class="drop-sub">JPG · PNG · WEBP · JSON · max 30 MB</div>
+        </div>
+        <div class="modal-hint" style="margin-top:10px;">
+          Drop an image to use it as the canvas background, or drop a .json file to load a full payload.
+        </div>
+      </div>
+
+      <!-- Tab: URL -->
+      <div id="pane-url" class="hidden">
+        <div class="field-row" style="gap:8px">
+          <input class="field-input" type="url" id="url-input"
+                 placeholder="https://example.com/cleaned_image.jpg"
+                 style="flex:1;font-size:12px;padding:8px 10px;" />
+        </div>
+        <div class="modal-hint" style="margin-top:8px;">
+          Direct URL to a cleaned background image. Text blocks can be added via the JSON tab.
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="tool-btn" onclick="closeModal()">Cancel</button>
+      <button class="tool-btn primary" onclick="loadFromModal()">Load</button>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden file input for drag-drop on canvas -->
+<input type="file" id="file-hidden" accept="image/*,.json" style="display:none"
+       onchange="handleHiddenFileInput(event)" />
+
+<!-- Hidden canvas for export -->
+<canvas id="export-canvas" style="display:none"></canvas>
+
+<!-- Main JS -->
+<script src="main.js"></script>
 
 </body>
 </html>
