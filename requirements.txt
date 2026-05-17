@@ -8,3 +8,6 @@ easyocr>=1.7.1
 opencv-python-headless>=4.9.0  # headless = no GUI deps (server-safe)
 numpy>=1.26.0
 Pillow>=10.3.0
+torch>=2.1.0
+onnx>=1.16.0
+onnxruntime>=1.18.0   # optional but recommended for smoke-test

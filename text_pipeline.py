@@ -10,7 +10,9 @@
 ║    • extract_for_editor()  ← single-call editor pipeline         ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
-
+from train_font_classifier import load_font_classifier, predict_font
+_font_clf = load_font_classifier()          # call once, caches ORT session
+region.font_name = predict_font(_font_clf, crop_gray)  # → "Arial"
 # ─────────────────────────────────────────────────────────────────
 # 0. IMPORTS
 # ─────────────────────────────────────────────────────────────────
