@@ -2,12 +2,13 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║        Text Removal & Replacement Pipeline  (Image / Video)      ║
 ║  Stack: EasyOCR · LaMa · Stable Diffusion Inpaint · PIL/OpenCV   ║
+║  ENHANCED: 10-Class Font Classifier (ONNX) Integration           ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  v2 — Content-Aware Editor additions                             ║
-║    • EditorBlock TypedDict                                       ║
-║    • rgb_to_hex() helper                                         ║
-║    • CvInpainter  (cv2.inpaint — no model download required)     ║
-║    • extract_for_editor()  ← single-call editor pipeline         ║
+║  v3 — Font Classification additions                              ║
+║    • FontClassifier class (10-class ONNX model)                  ║
+║    • EditorBlock enriched with 'font_family' field               ║
+║    • extract_for_editor() decorated with font predictions        ║
+║    • Graceful fallback to "sans-serif" on model failure         ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -32,13 +33,269 @@ log = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────
-# 1-A.  NEW ▶  Editor type + hex helper
+# 1. FONT CLASSIFIER — 10-CLASS ONNX MODEL
+# ─────────────────────────────────────────────────────────────────
+class FontClassifier:
+    """
+    Inference wrapper for 10-class font family ONNX model.
+    
+    Supported fonts (0-9):
+      0: Arial
+      1: Times New Roman
+      2: Courier New
+      3: Calibri
+      4: Georgia
+      5: Verdana
+      6: Roboto
+      7: Helvetica
+      8: Garamond
+      9: Consolas
+    
+    Model Input:  64×64 grayscale float32 image [0, 1]
+    Model Output: [1, 10] logits → argmax → class index
+    
+    Thread-safe inference with lazy loading. Gracefully degrades to
+    "sans-serif" if model unavailable (offline resilience).
+    """
+
+    # ── Index-to-name mapping (EXACT ORDER CRITICAL) ──
+    DEFAULT_LABELS = [
+        "Arial",              # 0
+        "Times New Roman",    # 1
+        "Courier New",        # 2
+        "Calibri",            # 3
+        "Georgia",            # 4
+        "Verdana",            # 5
+        "Roboto",             # 6
+        "Helvetica",          # 7
+        "Garamond",           # 8
+        "Consolas",           # 9
+    ]
+
+    def __init__(self, model_path: Optional[str] = None, gpu: bool = False):
+        """
+        Initialize FontClassifier.
+        
+        Parameters
+        ----------
+        model_path : str, optional
+            Path to ONNX model file. If None, attempts auto-discovery
+            in common locations. Lazy-loaded on first predict() call.
+        gpu : bool
+            If True, attempt to use CUDA/GPU for inference.
+        """
+        self.model_path    = model_path
+        self.gpu           = gpu
+        self._session      = None
+        self._input_name   = None
+        self._output_name  = None
+        self._initialized  = False
+        self._init_error   = None
+
+        log.info("FontClassifier initialized (model_path=%s, gpu=%s)",
+                 model_path, gpu)
+
+    def _lazy_load(self) -> bool:
+        """
+        Lazy-load ONNX runtime and model on first inference.
+        Returns True if successful, False if model unavailable.
+        """
+        if self._initialized:
+            return self._session is not None
+
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            self._init_error = (
+                "onnxruntime not installed. "
+                "Install: pip install onnxruntime"
+            )
+            log.warning(self._init_error)
+            self._initialized = True
+            return False
+
+        # ── Resolve model path ──
+        model_file = self.model_path
+        if not model_file:
+            candidates = [
+                "models/font_classifier.onnx",
+                "./font_classifier.onnx",
+                "/app/models/font_classifier.onnx",  # Docker path
+                str(Path(__file__).parent.parent / "models" / "font_classifier.onnx"),
+            ]
+            for cand in candidates:
+                if Path(cand).exists():
+                    model_file = cand
+                    break
+
+        if not model_file or not Path(model_file).exists():
+            self._init_error = (
+                f"Font classifier ONNX model not found. "
+                f"Searched: {candidates}"
+            )
+            log.warning(self._init_error)
+            self._initialized = True
+            return False
+
+        try:
+            # ── Session options for provider selection ──
+            sess_opts = ort.SessionOptions()
+            sess_opts.log_severity_level = 3  # Suppress verbose logs
+
+            # ── Provider selection: GPU > CPU ──
+            providers = []
+            if self.gpu:
+                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                providers = ["CPUExecutionProvider"]
+
+            self._session = ort.InferenceSession(
+                model_file,
+                sess_opts=sess_opts,
+                providers=providers,
+            )
+
+            # ── Inspect I/O names ──
+            self._input_name = self._session.get_inputs()[0].name
+            self._output_name = self._session.get_outputs()[0].name
+
+            log.info(
+                "FontClassifier model loaded (%s) — "
+                "input: %s, output: %s, provider: %s",
+                model_file,
+                self._input_name,
+                self._output_name,
+                self._session.get_providers()[0] if self._session.get_providers() else "unknown",
+            )
+            self._initialized = True
+            return True
+
+        except Exception as e:
+            self._init_error = f"Failed to load ONNX model: {e}"
+            log.warning(self._init_error)
+            self._initialized = True
+            return False
+
+    def predict(self, image_crop: np.ndarray) -> str:
+        """
+        Predict font family for a text region crop.
+        
+        Parameters
+        ----------
+        image_crop : np.ndarray
+            Cropped text region (BGR or RGB, any size).
+        
+        Returns
+        -------
+        str
+            Font family name from DEFAULT_LABELS, or "sans-serif" fallback.
+        """
+        try:
+            # ── Lazy load on first call ──
+            if not self._lazy_load():
+                log.debug("Font classifier unavailable, using fallback")
+                return "sans-serif"
+
+            if self._session is None:
+                return "sans-serif"
+
+            # ── Preprocess: resize → grayscale → normalize ──
+            try:
+                # Handle both BGR (OpenCV) and RGB (PIL) gracefully
+                if len(image_crop.shape) == 3:
+                    # Convert BGR → RGB → grayscale if needed
+                    if image_crop.shape[2] == 3:
+                        gray = cv2.cvtColor(image_crop, cv2.COLOR_BGR2GRAY)
+                    elif image_crop.shape[2] == 4:
+                        # BGRA → BGR → grayscale
+                        gray = cv2.cvtColor(
+                            image_crop[:, :, :3], cv2.COLOR_BGR2GRAY
+                        )
+                    else:
+                        gray = cv2.cvtColor(image_crop, cv2.COLOR_RGB2GRAY)
+                else:
+                    gray = image_crop
+
+                # Resize to model input shape (64×64)
+                resized = cv2.resize(gray, (64, 64),
+                                    interpolation=cv2.INTER_LANCZOS4)
+
+                # Normalize to [0, 1] float32
+                normalized = resized.astype(np.float32) / 255.0
+
+                # Add batch dimension: (64, 64) → (1, 1, 64, 64)
+                # Adjust to model's expected input shape if needed
+                # Common: [batch, channels, height, width]
+                batch = np.expand_dims(np.expand_dims(normalized, axis=0), axis=0)
+
+                # ── Inference ──
+                outputs = self._session.run(
+                    [self._output_name],
+                    {self._input_name: batch},
+                )
+
+                # ── Parse output ──
+                logits = outputs[0]  # Shape: [1, 10]
+
+                if logits.shape[1] != len(self.DEFAULT_LABELS):
+                    log.warning(
+                        "Model output shape mismatch: expected %d classes, got %d. "
+                        "Using fallback.",
+                        len(self.DEFAULT_LABELS),
+                        logits.shape[1],
+                    )
+                    return "sans-serif"
+
+                class_idx = int(np.argmax(logits[0]))
+
+                # ── Bounds check (safety) ──
+                if class_idx < 0 or class_idx >= len(self.DEFAULT_LABELS):
+                    log.warning(
+                        "Class index out of bounds: %d (expected 0-%d). "
+                        "Using fallback.",
+                        class_idx,
+                        len(self.DEFAULT_LABELS) - 1,
+                    )
+                    return "sans-serif"
+
+                font_name = self.DEFAULT_LABELS[class_idx]
+                confidence = float(np.max(np.exp(logits[0]) / np.sum(np.exp(logits[0]))))
+
+                log.debug(
+                    "Font prediction: %s (confidence: %.3f)",
+                    font_name,
+                    confidence,
+                )
+
+                return font_name
+
+            except Exception as e:
+                log.warning(
+                    "Error during font prediction preprocessing: %s. "
+                    "Using fallback.",
+                    e,
+                )
+                return "sans-serif"
+
+        except Exception as e:
+            log.warning(
+                "Unexpected error in FontClassifier.predict(): %s. "
+                "Using fallback.",
+                e,
+            )
+            return "sans-serif"
+
+
+# ─────────────────────────────────────────────────────────────────
+# 1-A. EDITOR BLOCK TYPE WITH FONT FAMILY
 # ─────────────────────────────────────────────────────────────────
 
 class EditorBlock(TypedDict):
     """
     Serialisable dict for one text region returned by extract_for_editor().
 
+    ENHANCED v3: Includes 'font_family' field for 10-class classification.
+    
     Designed to be JSON-dumped directly into the metadata file that
     server.py / worker.py write to results/.
     """
@@ -47,11 +304,11 @@ class EditorBlock(TypedDict):
     y:           int
     w:           int
     h:           int
-    color:       str    # dominant text colour as CSS hex  e.g. "#2C2C2C"
-    bg_color:    str    # dominant background colour       e.g. "#F5F0EB"
-    size:        int    # estimated font size in CSS px
-    confidence:  float  # EasyOCR confidence 0-1
-    font_family: str    # predicted font family  e.g. "Arial"
+    color:       str       # dominant text colour as CSS hex  e.g. "#2C2C2C"
+    bg_color:    str       # dominant background colour       e.g. "#F5F0EB"
+    size:        int       # estimated font size in CSS px
+    confidence:  float     # EasyOCR confidence 0-1
+    font_family: str       # predicted font family name, e.g. "Arial"
 
 
 def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
@@ -60,89 +317,7 @@ def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 1-C.  NEW ▶  FontClassifier — offline ONNX font classification
-# ─────────────────────────────────────────────────────────────────
-class FontClassifier:
-    """
-    Offline font-family classifier backed by an ONNX model.
-
-    Gracefully degrades to a ``"sans-serif"`` fallback when the model
-    file is missing or ``onnxruntime`` is not installed.
-    """
-
-    DEFAULT_LABELS = ["Arial", "Times New Roman", "Courier New",
-                      "Calibri", "Georgia"]
-
-    def __init__(self, model_path: Optional[str] = None):
-        if model_path is None:
-            model_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "..", "models", "font_classifier.onnx",
-            )
-        self.labels  = list(self.DEFAULT_LABELS)
-        self.session = None
-        try:
-            import onnxruntime as ort
-            if not os.path.isfile(model_path):
-                raise FileNotFoundError(
-                    f"ONNX model not found at {model_path}"
-                )
-            self.session = ort.InferenceSession(
-                model_path,
-                providers=["CPUExecutionProvider"],
-            )
-            log.info("FontClassifier loaded from %s", model_path)
-        except Exception as exc:          # noqa: BLE001
-            log.warning(
-                "FontClassifier unavailable (%s: %s) — "
-                "predictions will fall back to 'sans-serif'.",
-                type(exc).__name__, exc,
-            )
-
-    # ── prediction ───────────────────────────────────────────────
-    def predict(self, crop_bgr: np.ndarray) -> str:
-        """
-        Classify a word-level image crop into a font-family name.
-
-        Parameters
-        ----------
-        crop_bgr : np.ndarray
-            BGR uint8 image patch of the text region.
-
-        Returns
-        -------
-        str
-            Predicted font family, or ``"sans-serif"`` on failure.
-        """
-        if self.session is None or crop_bgr is None or crop_bgr.size == 0:
-            return "sans-serif"
-        try:
-            gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            resized = cv2.resize(gray, (64, 64),
-                                 interpolation=cv2.INTER_AREA)
-            tensor = resized.astype(np.float32) / 255.0
-            tensor = tensor[np.newaxis, np.newaxis, :, :]  # [1,1,64,64]
-
-            input_name  = self.session.get_inputs()[0].name
-            outputs     = self.session.run(None, {input_name: tensor})
-            logits      = outputs[0]            # shape [1, num_classes]
-
-            # softmax → argmax
-            exp_logits  = np.exp(logits - np.max(logits))
-            probs       = exp_logits / exp_logits.sum()
-            class_idx   = int(np.argmax(probs))
-
-            if class_idx < len(self.labels):
-                return self.labels[class_idx]
-            return "sans-serif"
-        except Exception:
-            log.debug("FontClassifier.predict() failed — using fallback.",
-                      exc_info=True)
-            return "sans-serif"
-
-
-# ─────────────────────────────────────────────────────────────────
-# 1-B. DATA CLASSES   (unchanged from v1)
+# 2. DATA CLASSES   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 @dataclass
 class TextRegion:
@@ -161,6 +336,7 @@ class TextRegion:
     font_size:  int = 20
     text_color: Tuple[int, int, int] = (0, 0, 0)
     bg_color:   Tuple[int, int, int] = (255, 255, 255)
+    font_family: str = "sans-serif"  # NEW: predicted font family
 
     def __post_init__(self):
         pts = np.array(self.bbox, dtype=np.int32)
@@ -171,7 +347,7 @@ class TextRegion:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 2. TEXT DETECTION   (unchanged from v1)
+# 3. TEXT DETECTION   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 class TextDetector:
     """
@@ -202,7 +378,7 @@ class TextDetector:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 3. STYLE EXTRACTION   (unchanged from v1)
+# 4. STYLE EXTRACTION   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 class StyleExtractor:
     """
@@ -271,7 +447,7 @@ class StyleExtractor:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 4. MASK GENERATION   (unchanged from v1)
+# 5. MASK GENERATION   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 class MaskGenerator:
     """
@@ -301,66 +477,22 @@ class MaskGenerator:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 5-A.  NEW ▶  CvInpainter — zero-dependency OpenCV inpainting
+# 6. INPAINTING BACKENDS (cv2, LaMa, SD) — unchanged from v2
 # ─────────────────────────────────────────────────────────────────
 class CvInpainter:
-    """
-    Fast, offline inpainting using OpenCV's built-in Telea algorithm.
-
-    Why Telea for text removal?
-    ───────────────────────────
-    • Works entirely from surrounding pixel gradients — no model download.
-    • Performs excellently on flat/lightly-textured backgrounds (documents,
-      signage, UI screenshots).
-    • Instant inference: < 50 ms even on 4K images.
-
-    Trade-off: complex photographic backgrounds may show haloing.
-    For those cases, upgrade to LamaInpainter (simple-lama-inpainting).
-
-    Inpaint radius
-    ──────────────
-    The neighbourhood radius controls how far beyond the mask boundary
-    the algorithm samples.  10-15 px is ideal for most text sizes.
-    """
+    """Fast offline inpainting using OpenCV's Telea algorithm."""
 
     def __init__(self, radius: int = 12,
                  method: int = cv2.INPAINT_TELEA):
-        """
-        Parameters
-        ----------
-        radius : int
-            Inpainting neighbourhood radius in pixels.
-        method : int
-            cv2.INPAINT_TELEA (default, fast) or cv2.INPAINT_NS
-            (Navier-Stokes, smoother but slower).
-        """
         self.radius = radius
         self.method = method
 
     def inpaint(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """
-        Parameters
-        ----------
-        image : BGR uint8 ndarray
-        mask  : uint8 ndarray  (255 = inpaint, 0 = keep)
-
-        Returns
-        -------
-        BGR uint8 ndarray — cleaned image
-        """
         return cv2.inpaint(image, mask, self.radius, self.method)
 
 
-# ─────────────────────────────────────────────────────────────────
-# 5-B. LamaInpainter — higher quality, needs pip package
-# ─────────────────────────────────────────────────────────────────
 class LamaInpainter:
-    """
-    Uses the `simple-lama-inpainting` package which wraps the
-    official LaMa model with a one-call API.
-
-    Install: pip install simple-lama-inpainting
-    """
+    """Uses simple-lama-inpainting package for higher quality."""
 
     def __init__(self):
         from simple_lama_inpainting import SimpleLama
@@ -374,14 +506,8 @@ class LamaInpainter:
         return cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
 
 
-# ─────────────────────────────────────────────────────────────────
-# 5-C. SDInpainter — optional Stable Diffusion backend
-# ─────────────────────────────────────────────────────────────────
 class SDInpainter:
-    """
-    Uses runwayml/stable-diffusion-inpainting via 🤗 Diffusers.
-    Better for complex scenes; slower (GPU recommended).
-    """
+    """Stable Diffusion inpainting for photorealistic results."""
 
     def __init__(self, model_id: str = "runwayml/stable-diffusion-inpainting",
                  device: str = "cuda"):
@@ -423,12 +549,10 @@ class SDInpainter:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 6. TEXT RENDERER   (unchanged from v1)
+# 7. TEXT RENDERER   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 class TextRenderer:
-    """
-    Overlays replacement text onto the inpainted image.
-    """
+    """Overlays replacement text onto the inpainted image."""
 
     def __init__(self, font_path: Optional[str] = None):
         self.font_path = font_path
@@ -486,43 +610,49 @@ class TextRenderer:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 7.  NEW ▶  extract_for_editor() — single entry point for the
-#            content-aware editor workflow used by worker.py
+# 8. ENHANCED extract_for_editor() WITH FONT CLASSIFICATION
 # ─────────────────────────────────────────────────────────────────
 def extract_for_editor(
-    image_bgr:   np.ndarray,
-    languages:   List[str]  = None,
-    confidence:  float      = 0.40,
-    dilation_px: int        = 8,
-    inpaint_radius: int     = 12,
-    gpu:         bool       = False,
+    image_bgr:       np.ndarray,
+    languages:       List[str]  = None,
+    confidence:      float      = 0.40,
+    dilation_px:     int        = 8,
+    inpaint_radius:  int        = 12,
+    gpu:             bool       = False,
+    font_classifier: Optional[FontClassifier] = None,
 ) -> Tuple[np.ndarray, List[EditorBlock]]:
     """
-    Complete single-call pipeline for the content-aware editor.
+    ENHANCED: Complete single-call pipeline with 10-class font prediction.
 
     Stages
     ──────
     1. EasyOCR detection — word-level bounding boxes + confidence
     2. StyleExtractor    — K-Means text/bg colour, font-size estimate
-    3. MaskGenerator     — dilated binary mask over all text regions
-    4. CvInpainter       — cv2.inpaint (Telea) fills background cleanly
-    5. Build EditorBlock list with hex colours ready for JSON output
+    3. FontClassifier    — 10-class ONNX prediction (with fallback)
+    4. MaskGenerator     — dilated binary mask over all text regions
+    5. CvInpainter       — cv2.inpaint (Telea) fills background cleanly
+    6. Build EditorBlock list with font_family, colors, sizes
 
     Parameters
     ──────────
-    image_bgr       OpenCV BGR image array (from cv2.imread)
-    languages       EasyOCR language codes, e.g. ["en", "fr"]
-    confidence      Minimum OCR confidence threshold (0–1)
-    dilation_px     Mask dilation to catch antialiased glyph borders
-    inpaint_radius  cv2.inpaint neighbourhood radius (px)
-    gpu             Pass True to use CUDA for EasyOCR
+    image_bgr           OpenCV BGR image array (from cv2.imread)
+    languages           EasyOCR language codes, e.g. ["en", "fr"]
+    confidence          Minimum OCR confidence threshold (0–1)
+    dilation_px         Mask dilation to catch antialiased glyph borders
+    inpaint_radius      cv2.inpaint neighbourhood radius (px)
+    gpu                 Pass True to use CUDA for EasyOCR/FontClassifier
+    font_classifier     FontClassifier instance; if None, creates new
 
     Returns
     ───────
-    cleaned_bgr     The image with all text regions inpainted away
-    blocks          List[EditorBlock] — serialisable, JSON-ready
+    cleaned_bgr         The image with all text regions inpainted away
+    blocks              List[EditorBlock] — serialisable, JSON-ready
     """
     langs = languages or ["en"]
+
+    # ── Initialize font classifier if not provided ──
+    if font_classifier is None:
+        font_classifier = FontClassifier(gpu=gpu)
 
     # ── Stage 1: OCR ────────────────────────────────────────────
     detector = TextDetector(langs, gpu=gpu)
@@ -537,26 +667,35 @@ def extract_for_editor(
     for r in regions:
         extractor.extract(image_bgr, r)
 
-    # ── Stage 3: Mask ────────────────────────────────────────────
+    # ── Stage 3: Font classification per region ─────────────────
+    for r in regions:
+        try:
+            crop_bgr = image_bgr[r.y:r.y+r.h, r.x:r.x+r.w]
+            if crop_bgr.size > 0:  # Non-empty crop
+                font_name = font_classifier.predict(crop_bgr)
+                r.font_family = font_name
+                log.debug("Font prediction for '%s': %s", r.text, font_name)
+            else:
+                r.font_family = "sans-serif"
+        except Exception as e:
+            log.warning(
+                "Error predicting font for region '%s': %s. Using fallback.",
+                r.text, e
+            )
+            r.font_family = "sans-serif"
+
+    # ── Stage 4: Mask ────────────────────────────────────────────
     masker = MaskGenerator(dilation_px=dilation_px)
     mask   = masker.generate(image_bgr.shape, regions)
 
-    # ── Stage 4: Inpaint (OpenCV Telea — no model required) ──────
+    # ── Stage 5: Inpaint (OpenCV Telea — no model required) ──────
     inpainter  = CvInpainter(radius=inpaint_radius)
     cleaned    = inpainter.inpaint(image_bgr, mask)
     log.info("Inpainting complete  (%d region(s)).", len(regions))
 
-    # ── Stage 5: Font classification + Build EditorBlock list ───
-    font_classifier = FontClassifier()
-    H, W = image_bgr.shape[:2]
+    # ── Stage 6: Build EditorBlock list with fonts ───────────────
     blocks: List[EditorBlock] = []
     for r in regions:
-        # Safe crop for font classification
-        x1, y1 = max(0, r.x), max(0, r.y)
-        x2, y2 = min(W, r.x + r.w), min(H, r.y + r.h)
-        crop_patch = image_bgr[y1:y2, x1:x2]
-        font_family = font_classifier.predict(crop_patch)
-
         blocks.append(EditorBlock(
             text        = r.text,
             x           = r.x,
@@ -567,14 +706,14 @@ def extract_for_editor(
             bg_color    = rgb_to_hex(r.bg_color),
             size        = r.font_size,
             confidence  = round(r.confidence, 4),
-            font_family = font_family,
+            font_family = r.font_family,  # NEW: 10-class prediction
         ))
 
     return cleaned, blocks
 
 
 # ─────────────────────────────────────────────────────────────────
-# 8. MAIN PIPELINE ORCHESTRATOR   (unchanged from v1 — used by CLI)
+# 9. MAIN PIPELINE ORCHESTRATOR   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 class TextPipeline:
     """
@@ -588,13 +727,15 @@ class TextPipeline:
                  gpu:         bool          = False,
                  dilation_px: int           = 6,
                  font_path:   Optional[str] = None,
-                 confidence:  float         = 0.4):
+                 confidence:  float         = 0.4,
+                 font_classifier_path: Optional[str] = None):
 
         self.detector   = TextDetector(languages, gpu=gpu)
         self.extractor  = StyleExtractor()
         self.masker     = MaskGenerator(dilation_px)
         self.renderer   = TextRenderer(font_path)
         self.confidence = confidence
+        self.font_classifier = FontClassifier(font_classifier_path, gpu=gpu)
 
         if inpainter == "sd":
             device = "cuda" if gpu else "cpu"
@@ -617,6 +758,14 @@ class TextPipeline:
 
         for r in regions:
             self.extractor.extract(image_bgr, r)
+            # ── Font classification ──
+            try:
+                crop_bgr = image_bgr[r.y:r.y+r.h, r.x:r.x+r.w]
+                if crop_bgr.size > 0:
+                    r.font_family = self.font_classifier.predict(crop_bgr)
+            except Exception as e:
+                log.warning("Font classification error: %s", e)
+                r.font_family = "sans-serif"
 
         mask   = self.masker.generate(image_bgr.shape, regions)
         result = self.inpainter.inpaint(image_bgr, mask)
@@ -650,12 +799,11 @@ class TextPipeline:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 9. VIDEO PROCESSING   (unchanged from v1)
+# 10. VIDEO PROCESSING   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 class VideoProcessor:
     """
     Processes a video file frame-by-frame using the TextPipeline.
-    See v1 docstring for temporal consistency strategies.
     """
 
     def __init__(self, pipeline: TextPipeline,
@@ -745,7 +893,7 @@ class VideoProcessor:
 
 
 # ─────────────────────────────────────────────────────────────────
-# 10. DEBUG UTILITIES   (unchanged from v1)
+# 11. DEBUG UTILITIES   (unchanged from v1)
 # ─────────────────────────────────────────────────────────────────
 def visualize_detections(image: np.ndarray,
                           regions: List[TextRegion],
@@ -758,7 +906,7 @@ def visualize_detections(image: np.ndarray,
     for r in regions:
         pts = np.array(r.bbox, dtype=np.int32)
         cv2.polylines(vis, [pts], True, (0, 255, 0), 2)
-        label = f"{r.text[:20]}  ({r.confidence:.2f})"
+        label = f"{r.text[:20]}  ({r.confidence:.2f})  font: {r.font_family}"
         cv2.putText(vis, label, (r.x, max(0, r.y - 6)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1,
                     cv2.LINE_AA)
@@ -787,7 +935,7 @@ def save_debug_pack(image: np.ndarray, result: np.ndarray,
 
 
 # ─────────────────────────────────────────────────────────────────
-# 11. CLI   (unchanged from v1)
+# 12. CLI   (enhanced with font classifier option)
 # ─────────────────────────────────────────────────────────────────
 def build_cli() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -800,16 +948,18 @@ Examples
 # Remove all text (OpenCV inpainting — no model download):
   python text_pipeline.py remove --input sign.jpg --output clean.jpg --inpainter cv
 
-# Remove with LaMa (higher quality):
-  python text_pipeline.py remove --input sign.jpg --output clean.jpg
+# Remove with font classification (10-class ONNX):
+  python text_pipeline.py remove --input sign.jpg --output clean.jpg \\
+      --font-classifier models/font_classifier.onnx
 
 # Replace specific text:
   python text_pipeline.py replace \\
       --input label.png --output translated.png \\
       --map '{"Hello":"Bonjour"}'
 
-# Editor extraction only (prints JSON blocks):
-  python text_pipeline.py editor --input photo.jpg --output-dir ./out/
+# Editor extraction only (prints JSON blocks with fonts):
+  python text_pipeline.py editor --input photo.jpg --output-dir ./out/ \\
+      --font-classifier models/font_classifier.onnx
         """
     )
     p.add_argument("mode", choices=["remove", "replace", "editor"])
@@ -821,6 +971,8 @@ Examples
     p.add_argument("--languages", nargs="+", default=["en"])
     p.add_argument("--inpainter", choices=["lama", "sd", "cv"], default="cv",
                    help="Inpainter backend (cv = built-in OpenCV, no download)")
+    p.add_argument("--font-classifier", default=None,
+                   help="Path to 10-class ONNX font classifier model")
     p.add_argument("--gpu",        action="store_true")
     p.add_argument("--dilation",   type=int,   default=8)
     p.add_argument("--confidence", type=float, default=0.4)
@@ -835,17 +987,26 @@ def main():
     parser = build_cli()
     args   = parser.parse_args()
 
-    # ── Editor mode: extract + inpaint → JSON metadata ──────────
+    # ── Prepare font classifier ──
+    font_classifier = None
+    if args.font_classifier:
+        font_classifier = FontClassifier(
+            model_path=args.font_classifier,
+            gpu=args.gpu,
+        )
+
+    # ── Editor mode: extract + inpaint → JSON metadata ──
     if args.mode == "editor":
         img = cv2.imread(args.input)
         if img is None:
             sys.exit(f"ERROR: Cannot read image: {args.input}")
         cleaned, blocks = extract_for_editor(
             img,
-            languages   = args.languages,
-            confidence  = args.confidence,
-            dilation_px = args.dilation,
-            gpu         = args.gpu,
+            languages       = args.languages,
+            confidence      = args.confidence,
+            dilation_px     = args.dilation,
+            gpu             = args.gpu,
+            font_classifier = font_classifier,
         )
         out_dir = Path(args.output_dir or ".")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -860,12 +1021,13 @@ def main():
 
     # ── Remove / Replace modes (legacy pipeline) ─────────────────
     pipeline = TextPipeline(
-        languages   = args.languages,
-        inpainter   = args.inpainter,
-        gpu         = args.gpu,
-        dilation_px = args.dilation,
-        font_path   = args.font_path,
-        confidence  = args.confidence,
+        languages              = args.languages,
+        inpainter              = args.inpainter,
+        gpu                    = args.gpu,
+        dilation_px            = args.dilation,
+        font_path              = args.font_path,
+        confidence             = args.confidence,
+        font_classifier_path   = args.font_classifier,
     )
     replacement_map = json.loads(args.map) if args.map else None
     input_path      = Path(args.input)

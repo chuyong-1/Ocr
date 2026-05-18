@@ -2,7 +2,7 @@
 """
 train_font_classifier.py
 ════════════════════════════════════════════════════════════════════════════════
-Synthetic Font Classifier — Training Script
+Synthetic Font Classifier — Training Script (10-Class)
 Integrates with: chuyong-1/Ocr  (PixelScribe pipeline)
 
 Pipeline
@@ -16,14 +16,14 @@ Pipeline
 
 Output tensor signature (matches text_pipeline.py / app.py expectations):
   Input  → [1, 1, 64, 64]  float32  (normalised 0.0–1.0)
-  Output → [1, 5]          float32  (raw logits per font class)
+  Output → [1, 10]         float32  (raw logits per font class)
 
 Font label order (index ↔ class):
-  0 → Arial
-  1 → Times New Roman
-  2 → Courier New
-  3 → Calibri
-  4 → Georgia
+  0 → Arial            5 → Verdana
+  1 → Times New Roman  6 → Roboto
+  2 → Courier New      7 → Helvetica
+  3 → Calibri          8 → Garamond
+  4 → Georgia          9 → Consolas
 
 Usage
 ─────
@@ -86,13 +86,18 @@ log = logging.getLogger("font_classifier")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 FONT_LABELS: List[str] = [
-    "Arial",
-    "Times New Roman",
-    "Courier New",
-    "Calibri",
-    "Georgia",
+    "Arial",              # 0
+    "Times New Roman",    # 1
+    "Courier New",        # 2
+    "Calibri",            # 3
+    "Georgia",            # 4
+    "Verdana",            # 5
+    "Roboto",             # 6
+    "Helvetica",          # 7
+    "Garamond",           # 8
+    "Consolas",           # 9
 ]
-NUM_CLASSES: int  = len(FONT_LABELS)
+NUM_CLASSES: int  = len(FONT_LABELS)   # 10
 IMG_SIZE:    int  = 64          # both width and height
 PATCH_W:     int  = 256         # synthetic text patch before resize
 PATCH_H:     int  = 80
@@ -135,6 +140,41 @@ _FONT_CANDIDATES: dict[str, List[str]] = {
         "/System/Library/Fonts/Georgia.ttf",
         "C:/Windows/Fonts/georgia.ttf",
     ],
+    "Verdana": [
+        "/usr/share/fonts/truetype/msttcorefonts/Verdana.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",  # fallback
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Verdana.ttf",
+        "C:/Windows/Fonts/verdana.ttf",
+    ],
+    "Roboto": [
+        "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
+        "/usr/share/fonts/truetype/roboto/unhinted/Roboto-Regular.ttf",
+        "/usr/share/fonts/google-roboto/Roboto-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Roboto-Regular.ttf",
+        "C:/Windows/Fonts/Roboto-Regular.ttf",
+    ],
+    "Helvetica": [
+        "/usr/share/fonts/truetype/msttcorefonts/Helvetica.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",  # fallback
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "C:/Windows/Fonts/arial.ttf",  # Helvetica → Arial fallback on Windows
+    ],
+    "Garamond": [
+        "/usr/share/fonts/truetype/msttcorefonts/Garamond.ttf",
+        "/usr/share/fonts/truetype/ebgaramond/EBGaramond-Regular.ttf",
+        "/usr/share/fonts/opentype/ebgaramond/EBGaramond-Regular.otf",
+        "/System/Library/Fonts/Supplemental/Garamond.ttf",
+        "C:/Windows/Fonts/garamond.ttf",
+    ],
+    "Consolas": [
+        "/usr/share/fonts/truetype/msttcorefonts/Consolas.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",  # fallback
+        "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Consolas.ttf",
+        "C:/Windows/Fonts/consola.ttf",
+    ],
 }
 
 # Google Fonts download fallbacks (TTF direct links) – used only if no
@@ -145,6 +185,11 @@ _FONT_DOWNLOAD_URLS: dict[str, str] = {
     "Courier New":     "https://github.com/google/fonts/raw/main/apache/robotomono/static/RobotoMono-Regular.ttf",
     "Calibri":         "https://github.com/google/fonts/raw/main/apache/nunito/static/Nunito-Regular.ttf",
     "Georgia":         "https://github.com/google/fonts/raw/main/ofl/lora/Lora-Regular.ttf",
+    "Verdana":         "https://github.com/google/fonts/raw/main/ofl/sourcesans3/static/SourceSans3-Regular.ttf",
+    "Roboto":          "https://github.com/google/fonts/raw/main/apache/roboto/static/Roboto-Regular.ttf",
+    "Helvetica":       "https://github.com/google/fonts/raw/main/apache/roboto/static/Roboto-Regular.ttf",
+    "Garamond":        "https://github.com/google/fonts/raw/main/ofl/ebgaramond/static/EBGaramond-Regular.ttf",
+    "Consolas":        "https://github.com/google/fonts/raw/main/apache/robotomono/static/RobotoMono-Regular.ttf",
 }
 
 # Sample word pool for richer text variety
@@ -158,7 +203,7 @@ _WORD_POOL = (
 ).split()
 
 # ── Output directory ──────────────────────────────────────────────────────────
-MODELS_DIR = Path(__file__).parent / "models"
+MODELS_DIR = Path(__file__).parent.parent / "models"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -172,7 +217,7 @@ class FontResolver:
     is found locally.
     """
 
-    _cache_dir: Path = Path(__file__).parent / ".font_cache"
+    _cache_dir: Path = Path(__file__).parent.parent / ".font_cache"
 
     @classmethod
     def resolve(cls, name: str) -> Optional[str]:
@@ -490,7 +535,7 @@ class FontClassifierCNN(nn.Module):
              → AdaptiveAvgPool(4×4)                        → [B, 128, 4, 4]
 
     Head:    Flatten → Dropout(0.4) → FC(2048→256) → ReLU
-             → Dropout(0.2) → FC(256→5)
+             → Dropout(0.2) → FC(256→10)
 
     ~1.1 M parameters — fits easily in RAM; ~10 ms per image on CPU.
     """
@@ -757,7 +802,7 @@ class ONNXExporter:
 
     Tensor signature (matches PixelScribe pipeline):
       Input  : "input"   [1, 1, 64, 64]  float32
-      Output : "output"  [1, 5]           float32  (raw logits)
+      Output : "output"  [1, 10]          float32  (raw logits)
     """
 
     def __init__(self, model: FontClassifierCNN, output_dir: Path = MODELS_DIR):
@@ -905,8 +950,10 @@ def predict_font(
     tensor  = resized.astype(np.float32) / 255.0
     tensor  = tensor[np.newaxis, np.newaxis, :, :]   # [1, 1, 64, 64]
 
-    logits  = session.run(["output"], {"input": tensor})[0]   # [1, 5]
+    logits  = session.run(["output"], {"input": tensor})[0]   # [1, 10]
     idx     = int(np.argmax(logits, axis=1)[0])
+    if idx < 0 or idx >= len(FONT_LABELS):
+        return "sans-serif"
     return FONT_LABELS[idx]
 
 

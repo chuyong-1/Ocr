@@ -31,12 +31,16 @@ open frontend/index.html
 ```
 texteditor/
 ├── backend/
-│   ├── app.py              ← FastAPI server (OCR + inpainting pipeline)
+│   ├── server.py           ← FastAPI server (Jobs API & WebSockets)
+│   ├── worker.py           ← Celery background worker
+│   ├── text_pipeline.py    ← Core ML pipeline (OCR + inpaint + fonts)
+│   ├── app.py              ← Monolithic/legacy server
 │   └── requirements.txt    ← Python dependencies
-├── frontend/
-│   └── index.html          ← Vanilla JS + Tailwind CSS frontend
-├── start.sh                ← One-command launcher
-└── README.md
+├── frontend/               ← Vanilla JS + Tailwind CSS frontend
+├── models/                 ← ML Models (e.g., font classifier ONNX)
+├── data/                   ← Ephemeral data (uploads, results, SQLite DB)
+├── Start                   ← One-command launcher
+└── readme.md
 ```
 
 ---
