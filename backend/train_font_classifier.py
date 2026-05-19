@@ -2,7 +2,7 @@
 """
 train_font_classifier.py
 ════════════════════════════════════════════════════════════════════════════════
-Synthetic Font Classifier — Training Script (10-Class)
+Synthetic Font Classifier — Training Script (11-Class)
 Integrates with: chuyong-1/Ocr  (PixelScribe pipeline)
 
 Pipeline
@@ -16,7 +16,7 @@ Pipeline
 
 Output tensor signature (matches text_pipeline.py / app.py expectations):
   Input  → [1, 1, 64, 64]  float32  (normalised 0.0–1.0)
-  Output → [1, 10]         float32  (raw logits per font class)
+  Output → [1, 11]         float32  (raw logits per font class)
 
 Font label order (index ↔ class):
   0 → Arial            5 → Verdana
@@ -24,6 +24,7 @@ Font label order (index ↔ class):
   2 → Courier New      7 → Helvetica
   3 → Calibri          8 → Garamond
   4 → Georgia          9 → Consolas
+ 10 → YourNewFont          ← NEW: replace with your actual font name
 
 Usage
 ─────
@@ -96,8 +97,10 @@ FONT_LABELS: List[str] = [
     "Helvetica",          # 7
     "Garamond",           # 8
     "Consolas",           # 9
+    "YourNewFont",        # 10  ← NEW: replace "YourNewFont" with your font's
+                          #           actual name (e.g. "Futura", "Montserrat")
 ]
-NUM_CLASSES: int  = len(FONT_LABELS)   # 10
+NUM_CLASSES: int  = len(FONT_LABELS)   # 11
 IMG_SIZE:    int  = 64          # both width and height
 PATCH_W:     int  = 256         # synthetic text patch before resize
 PATCH_H:     int  = 80
@@ -175,6 +178,20 @@ _FONT_CANDIDATES: dict[str, List[str]] = {
         "/System/Library/Fonts/Supplemental/Consolas.ttf",
         "C:/Windows/Fonts/consola.ttf",
     ],
+    # ── NEW FONT ──────────────────────────────────────────────────────────────
+    # Replace the three placeholder paths below with the real paths to your
+    # font's .ttf (or .otf) file on each platform.
+    # The FontResolver tries each path in order and uses the first one found.
+    #
+    # Example (Futura):
+    #   Linux:   "/usr/share/fonts/truetype/futura/Futura-Medium.ttf"
+    #   macOS:   "/Library/Fonts/Futura.ttc"
+    #   Windows: "C:/Windows/Fonts/Futura.ttf"
+    "YourNewFont": [
+        "/usr/share/fonts/truetype/yournewfont/YourNewFont-Regular.ttf",   # Linux   ← replace
+        "/Library/Fonts/YourNewFont.ttf",                                  # macOS   ← replace
+        "C:/Windows/Fonts/YourNewFont.ttf",                                # Windows ← replace
+    ],
 }
 
 # Google Fonts download fallbacks (TTF direct links) – used only if no
@@ -190,6 +207,9 @@ _FONT_DOWNLOAD_URLS: dict[str, str] = {
     "Helvetica":       "https://github.com/google/fonts/raw/main/apache/roboto/static/Roboto-Regular.ttf",
     "Garamond":        "https://github.com/google/fonts/raw/main/ofl/ebgaramond/static/EBGaramond-Regular.ttf",
     "Consolas":        "https://github.com/google/fonts/raw/main/apache/robotomono/static/RobotoMono-Regular.ttf",
+    # YourNewFont has no automatic download URL — supply the .ttf paths in
+    # _FONT_CANDIDATES above, or add a direct URL here:
+    # "YourNewFont": "https://example.com/path/to/YourNewFont-Regular.ttf",
 }
 
 # Sample word pool for richer text variety
@@ -469,11 +489,8 @@ class DocumentAugmentor:
 
 class FontDataset(Dataset):
     """
-    Generates *samples_per_class* examples for each of the 5 font classes
+    Generates *samples_per_class* examples for each of the font classes
     and stores them in-memory as pre-augmented tensors.
-
-    Keeping data in memory (rather than re-generating each epoch) ensures
-    fast DataLoader iteration and reproducible train/val splits.
     """
 
     def __init__(
@@ -535,9 +552,7 @@ class FontClassifierCNN(nn.Module):
              → AdaptiveAvgPool(4×4)                        → [B, 128, 4, 4]
 
     Head:    Flatten → Dropout(0.4) → FC(2048→256) → ReLU
-             → Dropout(0.2) → FC(256→10)
-
-    ~1.1 M parameters — fits easily in RAM; ~10 ms per image on CPU.
+             → Dropout(0.2) → FC(256→NUM_CLASSES)
     """
 
     def __init__(self, num_classes: int = NUM_CLASSES):
@@ -645,7 +660,6 @@ class Trainer:
         )
         log.info("Train: %d  |  Val: %d  |  Batch: %d", n_train, n_val, batch_size)
 
-        # num_workers=0 for Windows compatibility; increase on Linux if slow
         nw = 0 if platform.system() == "Windows" else min(4, os.cpu_count() or 1)
         self.train_loader = DataLoader(
             train_ds, batch_size=batch_size, shuffle=True,
@@ -665,7 +679,6 @@ class Trainer:
             self.optimiser, T_max=epochs, eta_min=1e-5
         )
 
-    # ── One training epoch ────────────────────────────────────────────────
     def _train_epoch(self) -> Tuple[float, float]:
         self.model.train()
         total_loss, correct, total = 0.0, 0, 0
@@ -678,7 +691,6 @@ class Trainer:
             loss   = self.criterion(logits, labels)
             loss.backward()
 
-            # Gradient clipping — prevents rare exploding-gradient spikes
             nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=2.0)
             self.optimiser.step()
 
@@ -689,7 +701,6 @@ class Trainer:
 
         return total_loss / total, correct / total
 
-    # ── Validation pass ───────────────────────────────────────────────────
     def _val_epoch(self) -> Tuple[float, float]:
         self.model.eval()
         total_loss, correct, total = 0.0, 0, 0
@@ -707,7 +718,6 @@ class Trainer:
 
         return total_loss / total, correct / total
 
-    # ── Per-class accuracy report ─────────────────────────────────────────
     def _class_report(self):
         self.model.eval()
         per_class_correct = [0] * NUM_CLASSES
@@ -729,11 +739,10 @@ class Trainer:
             ok = per_class_correct[idx]
             acc = (ok / n * 100) if n > 0 else 0.0
             bar = "█" * int(acc / 5) + "░" * (20 - int(acc / 5))
-            log.info("  [%d] %-20s  %s  %5.1f%%  (%d/%d)",
+            log.info("  [%2d] %-20s  %s  %5.1f%%  (%d/%d)",
                      idx, label, bar, acc, ok, n)
         log.info("────────────────────────────────────────────────────────────")
 
-    # ── Full training run ─────────────────────────────────────────────────
     def run(self) -> FontClassifierCNN:
         log.info("═" * 60)
         log.info("  Starting training on device: %s", self.device.upper())
@@ -766,7 +775,6 @@ class Trainer:
                 lr_now, elapsed,
             )
 
-            # Track best checkpoint (in-memory — no disk write)
             if val_acc > best_val_acc:
                 best_val_acc    = val_acc
                 best_state_dict = {k: v.clone()
@@ -778,12 +786,10 @@ class Trainer:
                  best_val_acc * 100)
         log.info("═" * 60)
 
-        # Restore best weights
         if best_state_dict:
             self.model.load_state_dict(best_state_dict)
             log.info("  Best weights restored.")
 
-        # Per-class breakdown
         self._class_report()
 
         return self.model
@@ -797,12 +803,9 @@ class ONNXExporter:
     """
     Exports a trained FontClassifierCNN to ONNX format.
 
-    The exported model is verified with onnx.checker before saving
-    so that downstream inference engines receive a valid graph.
-
     Tensor signature (matches PixelScribe pipeline):
-      Input  : "input"   [1, 1, 64, 64]  float32
-      Output : "output"  [1, 10]          float32  (raw logits)
+      Input  : "input"   [1, 1, 64, 64]   float32
+      Output : "output"  [1, NUM_CLASSES]  float32  (raw logits)
     """
 
     def __init__(self, model: FontClassifierCNN, output_dir: Path = MODELS_DIR):
@@ -813,31 +816,24 @@ class ONNXExporter:
     def export(self) -> Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── CRITICAL: ONNX tracing requires model AND dummy input on the
-        #   same device.  ONNX/ONNXRuntime targets CPU inference, so we
-        #   always move the model to CPU before export regardless of what
-        #   device it was trained on.  This does NOT affect the saved
-        #   weights — it only changes where the trace graph is built.
         self.model = self.model.cpu()
         self.model.eval()
 
-        # Dummy input — explicitly on CPU to match the model above
         dummy_input = torch.zeros(1, 1, IMG_SIZE, IMG_SIZE,
                                   dtype=torch.float32, device="cpu")
 
         log.info("Exporting model to ONNX…")
         log.info("  Output path : %s", self.onnx_path)
         log.info("  Input  shape: %s", list(dummy_input.shape))
-        log.info("  Model device: %s (moved to CPU for export)",
-                 next(self.model.parameters()).device)
+        log.info("  Num classes : %d (%s)", NUM_CLASSES, FONT_LABELS)
 
         torch.onnx.export(
             self.model,
             dummy_input,
             str(self.onnx_path),
             export_params   = True,
-            opset_version   = 17,          # opset 17 supported by onnxruntime ≥1.15
-            do_constant_folding = True,    # fold BN into conv for faster inference
+            opset_version   = 17,
+            do_constant_folding = True,
             input_names     = ["input"],
             output_names    = ["output"],
             dynamic_axes    = {
@@ -848,21 +844,15 @@ class ONNXExporter:
 
         log.info("ONNX export complete.")
 
-        # ── Verify the ONNX graph is well-formed ────────────────────────
         try:
             import onnx as _onnx
             model_proto = _onnx.load(str(self.onnx_path))
             _onnx.checker.check_model(model_proto)
-            log.info("  ✓ ONNX checker: model is valid.")
-
-            # Print graph summary
             size_mb = self.onnx_path.stat().st_size / 1024 / 1024
-            log.info("  File size: %.2f MB", size_mb)
-            log.info("  Opset:     %d", model_proto.opset_import[0].version)
+            log.info("  ✓ ONNX checker: model is valid. Size: %.2f MB", size_mb)
         except Exception as exc:
             log.warning("  ONNX checker raised: %s  (export may still work)", exc)
 
-        # ── Smoke-test with onnxruntime if available ─────────────────────
         try:
             import onnxruntime as ort
             sess = ort.InferenceSession(
@@ -882,36 +872,20 @@ class ONNXExporter:
         log.info("  ✓ Model saved to: %s", self.onnx_path.resolve())
         log.info("  Label order: %s", FONT_LABELS)
         log.info("  Input sig:  [1, 1, 64, 64]  float32  (0.0–1.0)")
-        log.info("  Output sig: [1, %d]          float32  (logits)", NUM_CLASSES)
+        log.info("  Output sig: [1, %d]  float32  (logits)", NUM_CLASSES)
         log.info("═" * 60)
 
         return self.onnx_path
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §8  INTEGRATION HELPERS  (for use inside text_pipeline.py / app.py)
+# §8  INTEGRATION HELPERS
 # ════════════════════════════════════════════════════════════════════════════
 
 def load_font_classifier(
     onnx_path: Optional[str] = None,
 ) -> "onnxruntime.InferenceSession":
-    """
-    Convenience loader — call this from text_pipeline.py to get a
-    session ready for inference.
-
-    Usage in text_pipeline.py
-    ─────────────────────────
-        from train_font_classifier import load_font_classifier, predict_font
-        _font_clf = load_font_classifier()   # singleton
-
-        region.font_name = predict_font(_font_clf, crop_gray_uint8)
-
-    Parameters
-    ──────────
-    onnx_path : str or None
-        Path to the ONNX file.  Defaults to models/font_classifier.onnx
-        relative to this script's directory.
-    """
+    """Convenience loader — returns a session ready for inference."""
     try:
         import onnxruntime as ort
     except ImportError:
@@ -950,7 +924,7 @@ def predict_font(
     tensor  = resized.astype(np.float32) / 255.0
     tensor  = tensor[np.newaxis, np.newaxis, :, :]   # [1, 1, 64, 64]
 
-    logits  = session.run(["output"], {"input": tensor})[0]   # [1, 10]
+    logits  = session.run(["output"], {"input": tensor})[0]   # [1, NUM_CLASSES]
     idx     = int(np.argmax(logits, axis=1)[0])
     if idx < 0 or idx >= len(FONT_LABELS):
         return "sans-serif"
@@ -1015,25 +989,21 @@ def main():
     log.info("╠══════════════════════════════════════════════════════════╣")
     log.info("║  Samples/class: %-5d   Epochs: %-4d   Batch: %-4d      ║",
              args.samples, args.epochs, args.batch)
-    log.info("║  Device: %-10s   Seed:   %-4d                     ║",
-             args.device, args.seed)
+    log.info("║  Device: %-10s   Seed:   %-4d   Classes: %-3d       ║",
+             args.device, args.seed, NUM_CLASSES)
     log.info("╚══════════════════════════════════════════════════════════╝")
 
-    # ── 1. Build generator + augmentor ──────────────────────────────────
     generator = SyntheticDataGenerator()
     augmentor  = DocumentAugmentor()
 
-    # ── 2. Generate dataset ──────────────────────────────────────────────
     dataset = FontDataset(
         generator          = generator,
         augmentor          = augmentor,
         samples_per_class  = args.samples,
     )
 
-    # ── 3. Build model ───────────────────────────────────────────────────
     model = FontClassifierCNN(num_classes=NUM_CLASSES)
 
-    # ── 4. Train ─────────────────────────────────────────────────────────
     trainer = Trainer(
         model      = model,
         dataset    = dataset,
@@ -1044,7 +1014,6 @@ def main():
     )
     trained_model = trainer.run()
 
-    # ── 5. Export to ONNX ─────────────────────────────────────────────────
     exporter = ONNXExporter(trained_model, output_dir=Path(args.out_dir))
     onnx_path = exporter.export()
 
@@ -1057,4 +1026,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()  

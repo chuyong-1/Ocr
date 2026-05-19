@@ -25,7 +25,6 @@ from pathlib import Path
 
 import cv2
 from celery import Celery
-from celery.signals import task_postrun, task_prerun
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -90,7 +89,34 @@ def _set_progress(db, job, status: str, progress: int, error: str = None):
 
 
 # ─────────────────────────────────────────────────────────────────
-# Main Celery task  — v3 content-aware editor with font classification
+# LangGraph integration: ONNX session bootstrap (once per worker process)
+# ─────────────────────────────────────────────────────────────────
+from celery.signals import worker_process_init, task_postrun, task_prerun
+
+@worker_process_init.connect
+def _bootstrap_onnx(**_kwargs):
+    """
+    Called once per worker *process* (not per task).
+    Loads ONNX sessions (LaMa + FontClassifier) after the fork.
+    """
+    try:
+        from langgraph_pipeline import init_session_manager
+        init_session_manager(
+            lama_path=str(BASE_DIR.parent / "models" / "lama.onnx"),
+            font_path=str(BASE_DIR.parent / "models" / "font_classifier.onnx"),
+            font_labels=[
+                "Arial", "Times New Roman", "Courier New", "Calibri",
+                "Georgia", "Verdana", "Roboto", "Helvetica",
+                "Garamond", "Consolas",
+            ],
+        )
+        log.info("ONNX sessions loaded in worker process")
+    except Exception as exc:
+        log.warning("ONNX bootstrap skipped (non-fatal): %s", exc)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Main Celery task  — v4 LangGraph pipeline integration
 # ─────────────────────────────────────────────────────────────────
 @celery_app.task(
     bind=True,
@@ -100,27 +126,29 @@ def _set_progress(db, job, status: str, progress: int, error: str = None):
 )
 def process_job(self, job_id: str) -> dict:
     """
-    Execute the content-aware editor pipeline with 10-class font classification.
+    Execute the LangGraph content-aware pipeline with font classification.
 
     Stages
     ──────
     1.  Load image from uploads/
-    2.  extract_for_editor()   →   cleaned BGR image + EditorBlock list
-    3.  EditorBlocks now include 'font_family' field (10-class prediction)
-    4.  Save cleaned_{job_id}.jpg  to results/
-    5.  Save meta_{job_id}.json   to results/ (with font data)
-    6.  Update JobRecord with output_path + meta_path
+    2.  Re-detect text with EasyOCR → build TextBlock list
+    3.  Generate inpaint mask via MaskGenerator
+    4.  run_pipeline() — LangGraph graph (evaluator→inpaint→font→renderer)
+    5.  Write result image + meta JSON to results/
+    6.  Update DB with output paths
     7.  Set status = DONE
-
-    Defensive programming ensures graceful degradation if font classifier
-    ONNX model is unavailable (falls back to "sans-serif").
     """
     import sys
     sys.path.insert(0, str(BASE_DIR))
 
-    # Lazy import — keeps worker startup fast; avoids loading EasyOCR,
-    # FontClassifier, and other heavy ML deps until a job actually arrives.
-    from text_pipeline import extract_for_editor, FontClassifier
+    # Lazy imports — keeps worker startup fast
+    from text_pipeline import (
+        TextDetector, MaskGenerator, StyleExtractor,
+        EditorBlock, rgb_to_hex,
+    )
+    from langgraph_pipeline import (
+        run_pipeline, TextBlock, ProgressEmitter,
+    )
 
     db = Session_()
     try:
@@ -142,80 +170,103 @@ def process_job(self, job_id: str) -> dict:
             raise ValueError(f"cv2 could not decode: {input_path}")
 
         languages = json.loads(job.languages or '["en"]')
-        _set_progress(db, job, "RUNNING", 20)
 
-        # ── 2. Initialize FontClassifier (lazy-loads ONNX) ───────
-        #
-        # The FontClassifier gracefully falls back to "sans-serif" if the
-        # ONNX model file isn't found. This ensures the pipeline continues
-        # even if the model is missing or corrupted.
-        font_classifier = FontClassifier(gpu=False)
-        log.info("FontClassifier initialized in worker context")
-        _set_progress(db, job, "RUNNING", 30)
+        # ── 2. EasyOCR detection → TextBlock list ────────────────
+        detector = TextDetector(languages, gpu=False)
+        from text_pipeline import TextRegion
+        regions = detector.detect(img, confidence_threshold=0.40)
 
-        # ── 3. OCR + Style extraction + Font classification ─────
-        #
-        # extract_for_editor() now:
-        #   • Runs EasyOCR for text detection
-        #   • Extracts colors and font sizes
-        #   • Predicts 10-class font family per region
-        #   • Returns EditorBlocks with font_family field
-        #
-        cleaned, blocks = extract_for_editor(
-            image_bgr       = img,
-            languages       = languages,
-            confidence      = 0.40,
-            dilation_px     = 8,
-            gpu             = False,
-            font_classifier = font_classifier,
+        # Extract styles for metadata
+        extractor = StyleExtractor()
+        for r in regions:
+            extractor.extract(img, r)
+
+        # Convert TextRegions → LangGraph TextBlock dicts
+        text_blocks: list = []
+        for i, r in enumerate(regions):
+            text_blocks.append(TextBlock(
+                id=f"blk_{i}",
+                bbox=r.bbox,
+                text=r.text,
+                confidence=r.confidence,
+                x=r.x, y=r.y, w=r.w, h=r.h,
+            ))
+
+        # ── 3. Build mask ────────────────────────────────────────
+        masker = MaskGenerator(dilation_px=8)
+        mask = masker.generate(img.shape, regions)
+
+        # ── 4. Parse replacement map (if any) ────────────────────
+        replacement_map = {}
+        mode = getattr(job, "mode", "remove") or "remove"
+        if hasattr(job, "replacement_map") and job.replacement_map:
+            try:
+                replacement_map = json.loads(job.replacement_map)
+            except (json.JSONDecodeError, TypeError):
+                log.warning("Invalid replacement_map JSON — using remove mode")
+                mode = "remove"
+
+        # ── 5. Build ProgressEmitter ─────────────────────────────
+        emitter = ProgressEmitter(redis_url=REDIS_URL, job_id=job_id)
+
+        # ── 6. Run LangGraph pipeline ────────────────────────────
+        result_img, font_meta, complexity = run_pipeline(
+            image_bgr=img,
+            mask=mask,
+            text_blocks=text_blocks,
+            mode=mode,
+            replacement_map=replacement_map,
+            emitter=emitter,
         )
-        _set_progress(db, job, "RUNNING", 75)
 
         log.info(
-            "Extract-for-editor complete: %d region(s) with font predictions",
-            len(blocks),
+            "LangGraph pipeline complete: %d blocks, complexity=%.1f, mode=%s",
+            len(text_blocks), complexity, mode,
         )
 
-        # ── 4. Save cleaned image ────────────────────────────────
+        # ── 7. Save result image ─────────────────────────────────
         RESULT_DIR.mkdir(parents=True, exist_ok=True)
         ext          = input_path.suffix.lower() or ".jpg"
         cleaned_name = f"cleaned_{job_id}{ext}"
         cleaned_path = RESULT_DIR / cleaned_name
-        cv2.imwrite(str(cleaned_path), cleaned)
-        log.info("Cleaned image → %s", cleaned_path)
+        cv2.imwrite(str(cleaned_path), result_img)
+        log.info("Result image → %s", cleaned_path)
 
-        # ── 5. Build and save JSON metadata ──────────────────────
-        #
-        # The meta_payload now includes 'font_family' in each block.
-        # Frontend can read and apply these font predictions directly.
-        #
+        # ── 8. Build font_metadata lookup for EditorBlocks ───────
+        font_lookup = {fp["block_id"]: fp["label"] for fp in font_meta}
+
+        # ── 9. Build and save JSON metadata ──────────────────────
+        blocks: list = []
+        for i, r in enumerate(regions):
+            block_id = f"blk_{i}"
+            blocks.append(EditorBlock(
+                text        = r.text,
+                x           = r.x,
+                y           = r.y,
+                w           = r.w,
+                h           = r.h,
+                color       = rgb_to_hex(r.text_color),
+                bg_color    = rgb_to_hex(r.bg_color),
+                size        = r.font_size,
+                confidence  = round(r.confidence, 4),
+                font_family = font_lookup.get(block_id, "sans-serif"),
+            ))
+
         meta_payload = {
-            "bg_image" : f"/results/{cleaned_name}",  # served as static
+            "bg_image" : f"/results/{cleaned_name}",
             "image_w"  : int(img.shape[1]),
             "image_h"  : int(img.shape[0]),
-            "blocks"   : blocks,  # List[EditorBlock] with font_family
+            "blocks"   : blocks,
+            "complexity_score": complexity,
+            "inpaint_method": "langgraph",
         }
 
         meta_path = RESULT_DIR / f"meta_{job_id}.json"
         meta_path.write_text(json.dumps(meta_payload, indent=2),
                              encoding="utf-8")
-        log.info(
-            "Metadata JSON  → %s  (%d block(s) with fonts)",
-            meta_path,
-            len(blocks),
-        )
+        log.info("Metadata JSON  → %s  (%d blocks)", meta_path, len(blocks))
 
-        # Validation: ensure all blocks have font_family field
-        for block in blocks:
-            if "font_family" not in block:
-                log.warning(
-                    "Block '%s' missing font_family field. "
-                    "Adding default 'sans-serif'.",
-                    block.get("text", "unknown"),
-                )
-                block["font_family"] = "sans-serif"
-
-        # ── 6. Persist output paths in DB ────────────────────────
+        # ── 10. Persist output paths in DB ───────────────────────
         job.output_path = str(cleaned_path)
         job.meta_path   = str(meta_path)
         _set_progress(db, job, "DONE", 100)
@@ -227,6 +278,7 @@ def process_job(self, job_id: str) -> dict:
             "output_path" : str(cleaned_path),
             "meta_path"   : str(meta_path),
             "block_count" : len(blocks),
+            "complexity"  : complexity,
             "fonts"       : list(set(b.get("font_family", "sans-serif") for b in blocks)),
         }
 

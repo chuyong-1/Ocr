@@ -40,6 +40,31 @@
 'use strict';
 
 /* ══════════════════════════════════════════════════════════════════════
+   FONT FALLBACK MAP — CSS font-family stacks for the 10-class classifier
+   Each classifier label maps to a full CSS fallback chain so that:
+   • Fonts render correctly even if the exact family isn't installed
+   • Serif → serif, mono → monospace, sans → sans-serif
+   • Google Fonts aliases (EB Garamond, Roboto Mono) are included
+══════════════════════════════════════════════════════════════════════ */
+const FONT_FALLBACK_MAP = {
+  'Arial':            '"Arial", "Helvetica Neue", Helvetica, sans-serif',
+  'Times New Roman':  '"Times New Roman", Times, "Noto Serif", serif',
+  'Courier New':      '"Courier New", Courier, "Roboto Mono", monospace',
+  'Calibri':          '"Calibri", "Segoe UI", Candara, sans-serif',
+  'Georgia':          '"Georgia", Cambria, "Times New Roman", serif',
+  'Verdana':          '"Verdana", Geneva, Tahoma, sans-serif',
+  'Roboto':           '"Roboto", "Helvetica Neue", Arial, sans-serif',
+  'Helvetica':        '"Helvetica Neue", Helvetica, Arial, sans-serif',
+  'Garamond':         '"EB Garamond", Garamond, "Times New Roman", serif',
+  'Consolas':         '"Consolas", "Roboto Mono", "Courier New", monospace',
+};
+
+/** Resolve a classifier label to a full CSS font-family stack */
+function resolveFontStack(fontFamily) {
+  return FONT_FALLBACK_MAP[fontFamily] || `"${fontFamily}", sans-serif`;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
    APP STATE — single source of truth
 ══════════════════════════════════════════════════════════════════════ */
 const AppState = {
@@ -247,7 +272,7 @@ const OverlayEngine = (() => {
     // ── Typography ──
     el.style.fontSize   = `${Math.round(live.size * s)}px`;
     el.style.color      = live.color || '#1A1A1A';
-    el.style.fontFamily = `"${live.font_family}", sans-serif`;
+    el.style.fontFamily = resolveFontStack(live.font_family);
     el.style.lineHeight = '1.25';
 
     // Optional: soft background hint from bg_color
@@ -324,7 +349,7 @@ const OverlayEngine = (() => {
 
     if (font_family !== undefined) {
       live.font_family          = font_family;
-      live.el.style.fontFamily  = `"${font_family}", sans-serif`;
+      live.el.style.fontFamily  = resolveFontStack(font_family);
     }
     if (size !== undefined) {
       live.size                = size;
@@ -562,10 +587,10 @@ const LayerPanel = (() => {
       text.id        = `lyr-text-${live.id}`;
       text.textContent = `"${live.currentText}"`;
 
-      // Meta: font size
+      // Meta: font family badge
       const meta = document.createElement('div');
       meta.className   = 'layer-meta';
-      meta.textContent = `${live.size}px`;
+      meta.textContent = live.font_family || `${live.size}px`;
 
       item.append(swatch, text, meta);
 
@@ -631,7 +656,7 @@ const ExportEngine = (() => {
         }
 
         // Text
-        ctx.font         = `${nativeSz}px "${font}", sans-serif`;
+        ctx.font         = `${nativeSz}px ${resolveFontStack(font)}`;
         ctx.fillStyle    = color;
         ctx.textBaseline = 'top';
 
@@ -1275,39 +1300,75 @@ function _loadDemoPayload() {
       },
       {
         text: 'Edit this text. Click any block to select it, then type.',
-        x: 120, y: 260, w: 720, h: 36,
+        x: 120, y: 240, w: 720, h: 32,
         color: '#6C63FF',
         bg_color: 'transparent',
-        size: 18,
+        size: 16,
         font_family: 'Courier New',
         confidence: 0.95
       },
       {
         text: 'Font: Times New Roman · Detected with 94.2% confidence',
-        x: 120, y: 360, w: 700, h: 32,
+        x: 120, y: 290, w: 700, h: 28,
         color: '#2A2A38',
         bg_color: 'transparent',
-        size: 16,
+        size: 15,
         font_family: 'Times New Roman',
         confidence: 0.942
       },
       {
         text: 'Use the right panel to change font, size, and colour.',
-        x: 120, y: 440, w: 680, h: 30,
+        x: 120, y: 340, w: 680, h: 26,
         color: '#444',
         bg_color: 'transparent',
-        size: 15,
+        size: 14,
         font_family: 'Calibri',
         confidence: 0.91
       },
       {
         text: 'Export PNG reconstructs full-res composite locally.',
-        x: 120, y: 560, w: 660, h: 28,
-        color: '#888',
+        x: 120, y: 385, w: 660, h: 26,
+        color: '#555',
         bg_color: 'transparent',
         size: 14,
         font_family: 'Verdana',
         confidence: 0.88
+      },
+      {
+        text: 'Roboto — loaded via Google Fonts for cross-platform support.',
+        x: 120, y: 430, w: 700, h: 26,
+        color: '#3A3A48',
+        bg_color: 'transparent',
+        size: 14,
+        font_family: 'Roboto',
+        confidence: 0.93
+      },
+      {
+        text: 'Helvetica Neue renders beautifully on macOS and Windows.',
+        x: 120, y: 475, w: 700, h: 26,
+        color: '#2E2E3E',
+        bg_color: 'transparent',
+        size: 14,
+        font_family: 'Helvetica',
+        confidence: 0.90
+      },
+      {
+        text: 'Garamond — elegant serif typeface for body text.',
+        x: 120, y: 520, w: 660, h: 26,
+        color: '#3E3024',
+        bg_color: 'transparent',
+        size: 15,
+        font_family: 'Garamond',
+        confidence: 0.87
+      },
+      {
+        text: 'Consolas: monospaced → code & technical content.',
+        x: 120, y: 570, w: 660, h: 26,
+        color: '#6B6B88',
+        bg_color: 'transparent',
+        size: 14,
+        font_family: 'Consolas',
+        confidence: 0.85
       }
     ]
   };

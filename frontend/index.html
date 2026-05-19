@@ -383,7 +383,6 @@
       height: auto;
       user-select: none;
       pointer-events: none;
-      /* Ensure image rendered pixels exactly match container */
       vertical-align: top;
     }
 
@@ -394,7 +393,7 @@
       left: 0;
       width: 100%;
       height: 100%;
-      pointer-events: none;   /* individual text fields re-enable */
+      pointer-events: none;
     }
 
     /* ════════════════════════════════════════════════════════
@@ -413,7 +412,6 @@
       border-radius: 2px;
       padding: 1px 2px;
       transition: border-color 0.12s ease, background 0.12s ease;
-      /* Prevent browser adding its own focus ring */
       -webkit-user-modify: read-write-plaintext-only;
     }
     .txt-block:hover {
@@ -427,7 +425,6 @@
       z-index: 10;
     }
 
-    /* Selection handles shown on active block */
     .txt-block.selected::before,
     .txt-block.selected::after {
       content: '';
@@ -468,7 +465,6 @@
       margin-bottom: 10px;
     }
 
-    /* Form controls */
     .field-row {
       display: flex;
       align-items: center;
@@ -514,7 +510,6 @@
       padding-right: 24px;
     }
 
-    /* Color swatch + input */
     .color-wrap {
       display: flex;
       align-items: center;
@@ -555,7 +550,6 @@
     }
     .color-hex:focus { border-color: #6C63FF; }
 
-    /* Number stepper */
     .stepper {
       display: flex;
       align-items: center;
@@ -576,10 +570,9 @@
       color: #E8E8F0;
       outline: none;
       text-align: center;
-      width: 0;       /* let flex handle sizing */
+      width: 0;
       min-width: 0;
     }
-    /* Remove default number spinners */
     .stepper input::-webkit-inner-spin-button,
     .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; }
     .stepper input[type=number] { -moz-appearance: textfield; }
@@ -603,7 +596,6 @@
     .step-btn:hover { background: #1E1E2A; color: #E8E8F0; }
     .step-btn:disabled { opacity: 0.2; cursor: not-allowed; }
 
-    /* Apply button */
     .apply-btn {
       width: 100%;
       padding: 8px 12px;
@@ -626,7 +618,6 @@
     }
     .apply-btn:disabled { opacity: 0.25; cursor: not-allowed; }
 
-    /* Coordinates display (read-only) */
     .coord-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -680,7 +671,7 @@
     .status-dot.purple { background: #6C63FF; }
 
     /* ════════════════════════════════════════════════════════
-       PROGRESS BAR (top of canvas area, shown during processing)
+       PROGRESS BAR
     ════════════════════════════════════════════════════════ */
     #progress-track {
       position: fixed;
@@ -822,7 +813,6 @@
       line-height: 1.6;
     }
 
-    /* Tab switcher inside modal */
     .tab-row {
       display: flex;
       gap: 2px;
@@ -850,7 +840,6 @@
       color: #E8E8F0;
     }
 
-    /* Drop zone inside modal */
     #modal-drop-zone {
       border: 1.5px dashed #2A2A38;
       border-radius: 8px;
@@ -884,7 +873,6 @@
     .hidden  { display: none !important; }
     .divider { height: 1px; background: #1A1A24; margin: 0 8px; }
 
-    /* Hover tooltip */
     [data-tip] {
       position: relative;
     }
@@ -907,7 +895,6 @@
       letter-spacing: 0.04em;
     }
 
-    /* Loading spinner */
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinner {
       display: inline-block;
@@ -920,7 +907,6 @@
       vertical-align: middle;
     }
 
-    /* Fade-in animation for layer items */
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(5px); }
       to   { opacity: 1; transform: translateY(0); }
@@ -945,9 +931,11 @@
 
     <!-- File actions -->
     <div class="toolbar-group">
-      <button class="tool-btn" id="btn-open" data-tip="Load JSON payload or image" onclick="openModal()">
+      <!-- CHANGED: id="btn-open" → id="btn-import", text "Open" → "Import",
+           data-tip updated to reflect accepted file types -->
+      <button class="tool-btn" id="btn-import" data-tip="Import JSON payload, JPG, or PDF" onclick="openModal()">
         <svg width="13" height="13" fill="none" viewBox="0 0 16 16"><path d="M2 4a1 1 0 011-1h3l1.5 2H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" stroke-width="1.4"/></svg>
-        Open
+        Import
       </button>
     </div>
 
@@ -1009,7 +997,7 @@
       <div class="empty-state" id="empty-state">
         <div class="empty-icon">⬚</div>
         <div class="empty-title">No blocks loaded</div>
-        <div class="empty-sub">Open a JSON payload or<br>drag an image to begin</div>
+        <div class="empty-sub">Import a JSON payload or<br>drag a JPG to begin</div>
       </div>
     </div>
 
@@ -1018,7 +1006,7 @@
     <!-- Quick upload trigger -->
     <div class="upload-btn" onclick="openModal()" id="sidebar-upload-btn">
       <div style="font-size:18px;margin-bottom:4px;opacity:0.4;">⊕</div>
-      <div>Open file or paste JSON</div>
+      <div>Import JPG, PDF, or JSON</div>
     </div>
 
   </aside>
@@ -1029,7 +1017,7 @@
     <!-- Welcome overlay -->
     <div id="welcome-drop">
       <div class="welcome-glyph">EDIT<br>TEXT</div>
-      <div class="welcome-cta">Open JSON payload · Drag image · Press Ctrl+O</div>
+      <div class="welcome-cta">Import JSON payload · Drag JPG · Press Ctrl+O</div>
     </div>
 
     <!-- The editable workspace -->
@@ -1170,7 +1158,7 @@
 <div id="modal-overlay" onclick="if(event.target===this) closeModal()">
   <div class="modal">
     <div class="modal-head">
-      <div class="modal-title">Open Source</div>
+      <div class="modal-title">Import Source</div>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-body">
@@ -1178,7 +1166,7 @@
       <!-- Tab selector -->
       <div class="tab-row">
         <button class="tab-btn active" id="tab-json" onclick="switchTab('json')">Paste JSON</button>
-        <button class="tab-btn" id="tab-image" onclick="switchTab('image')">Image + JSON file</button>
+        <button class="tab-btn" id="tab-image" onclick="switchTab('image')">JPG / PDF / JSON file</button>
         <button class="tab-btn" id="tab-url" onclick="switchTab('url')">Image URL</button>
       </div>
 
@@ -1199,14 +1187,16 @@
              ondragover="event.preventDefault();this.classList.add('drag-over')"
              ondrop="handleModalDrop(event)"
              ondragleave="this.classList.remove('drag-over')">
-          <input type="file" id="file-img-input" accept="image/*,.json" multiple
+          <!-- CHANGED: accept restricted to .jpg, .jpeg, .pdf, .json only -->
+          <input type="file" id="file-img-input" accept=".jpg,.jpeg,.pdf,.json"
                  style="display:none" onchange="handleModalFileInput(event)" />
           <div class="drop-icon">⬆</div>
-          <div class="drop-text">Drop image or JSON file here</div>
-          <div class="drop-sub">JPG · PNG · WEBP · JSON · max 30 MB</div>
+          <!-- CHANGED: drop zone copy updated to list allowed types -->
+          <div class="drop-text">Drop a JPG, PDF, or JSON file here</div>
+          <div class="drop-sub">JPG · PDF · JSON · max 30 MB</div>
         </div>
         <div class="modal-hint" style="margin-top:10px;">
-          Drop an image to use it as the canvas background, or drop a .json file to load a full payload.
+          Drop a JPG image to use it as the canvas background, a PDF to send through the backend pipeline, or a .json file to load a full payload.
         </div>
       </div>
 
@@ -1231,7 +1221,8 @@
 </div>
 
 <!-- Hidden file input for drag-drop on canvas -->
-<input type="file" id="file-hidden" accept="image/*,.json" style="display:none"
+<!-- CHANGED: accept restricted to .jpg, .jpeg, .pdf, .json only -->
+<input type="file" id="file-hidden" accept=".jpg,.jpeg,.pdf,.json" style="display:none"
        onchange="handleHiddenFileInput(event)" />
 
 <!-- Hidden canvas for export -->
