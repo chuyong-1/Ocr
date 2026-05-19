@@ -1,0 +1,4 @@
+# Place ONNX Runtime Web assets here for offline use.
+# Expected files:
+# - ort.min.js
+# - ort-wasm.wasm (and optional SIMD/threads variants)

@@ -1,0 +1,5 @@
+# Place local Tesseract.js assets here for offline OCR.
+# Expected files:
+# - tesseract.min.js
+# - worker.min.js
+# - tesseract-core.wasm.js

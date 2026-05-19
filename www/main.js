@@ -47,6 +47,27 @@
 'use strict';
 
 /* ══════════════════════════════════════════════════════════════════════
+  ONNX RUNTIME WASM PATHS (must be set before InferenceSession.create)
+  Prefer local assets for offline, fallback to CDN when missing.
+══════════════════════════════════════════════════════════════════════ */
+const ONNX_WASM_LOCAL = './vendor/onnx/';
+const ONNX_WASM_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+const PDF_WORKER_LOCAL = './vendor/pdfjs/pdf.worker.min.js';
+const PDF_WORKER_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+/** Relative to www/ — Capacitor local server serves from webDir root. */
+const FONT_CLASSIFIER_MODEL_URL = './models/font_classifier.onnx';
+
+/** localStorage key for optional Python OCR backend (EasyOCR + inpaint). */
+const API_BASE_STORAGE_KEY = 'pixelscribe_api_base';
+
+/** Offline OCR (Tesseract.js or native TextDetector) config. */
+const OFFLINE_OCR_LANG = 'eng';
+const OFFLINE_OCR_TESSERACT_BASE = './vendor/tesseract';
+const OFFLINE_OCR_TESSDATA_BASE = './tessdata';
+const OFFLINE_OCR_MAX_DIM = 2000;
+
+/* ══════════════════════════════════════════════════════════════════════
    OPENCV.JS READINESS
    OpenCV.js loads asynchronously via a <script async> tag in index.html.
    The `cvReady` flag is set true in `onOpenCvLoad()` once the WASM
@@ -80,33 +101,211 @@
 /** True once OpenCV.js WASM runtime has fully initialised. */
 let cvReady = false;
 
+/* ══════════════════════════════════════════════════════════════════════
+   AI RUNTIME — gate processing until OpenCV + ONNX are both ready
+══════════════════════════════════════════════════════════════════════ */
+const AIRuntime = (() => {
+  let _onnxReady = false;
+  let _onnxInitDone = false;
+  let _onnxInitError = null;
+  let _cvReadyResolve = null;
+
+  const _cvReadyPromise = new Promise((resolve) => {
+    _cvReadyResolve = resolve;
+  });
+
+  let _onnxInitPromise = null;
+
+  function setOnnxInitPromise(p) {
+    _onnxInitPromise = p;
+  }
+
+  function markCvReady() {
+    if (_cvReadyResolve) {
+      _cvReadyResolve();
+      _cvReadyResolve = null;
+    }
+    _refreshUiLock();
+  }
+
+  function markOnnxReady() {
+    _onnxReady = true;
+    _onnxInitDone = true;
+    _onnxInitError = null;
+    _refreshUiLock();
+  }
+
+  function markOnnxFailed(err) {
+    _onnxReady = false;
+    _onnxInitDone = true;
+    _onnxInitError = err;
+    _refreshUiLock();
+  }
+
+  function isCvReady() {
+    return cvReady;
+  }
+
+  function isOnnxReady() {
+    return _onnxReady;
+  }
+
+  function isReady() {
+    return cvReady && _onnxReady;
+  }
+
+  async function waitUntilReady(timeoutMs = 120000) {
+    const waits = [_cvReadyPromise];
+    if (_onnxInitPromise) waits.push(_onnxInitPromise);
+
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error('AI libraries timed out loading. Check network/CDN access and try again.'));
+      }, timeoutMs);
+    });
+
+    try {
+      await Promise.race([
+        Promise.all(waits).then(() => {
+          if (!cvReady) throw new Error('OpenCV.js is not ready yet.');
+          if (!_onnxInitDone) throw new Error('ONNX model is still loading.');
+          if (!_onnxReady) {
+            const detail = _onnxInitError && _onnxInitError.message
+              ? _onnxInitError.message
+              : 'ONNX session failed to load.';
+            throw new Error(detail);
+          }
+        }),
+        timeout,
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return {
+    setOnnxInitPromise,
+    markCvReady,
+    markOnnxReady,
+    markOnnxFailed,
+    isCvReady,
+    isOnnxReady,
+    isReady,
+    waitUntilReady,
+  };
+})();
+
+/**
+ * Mobile-visible AI error (physical device has no easy console).
+ * @param {string} context
+ * @param {unknown} err
+ */
+function _aiAlert(context, err) {
+  const msg = (err && err.message) ? err.message : String(err);
+  console.error(`[PixelScribe AI · ${context}]`, err);
+  alert('AI Error: ' + msg);
+}
+
+function _loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load script: ' + src));
+    document.head.appendChild(script);
+  });
+}
+
+async function _resolveLocalOrCdnBase(localBase, cdnBase, probeFile) {
+  try {
+    const res = await fetch(localBase + probeFile, { method: 'HEAD' });
+    if (res.ok) return localBase;
+  } catch (err) {
+    // Ignore and fall back to CDN.
+  }
+  return cdnBase;
+}
+
+async function _setOnnxWasmPaths() {
+  if (typeof ort === 'undefined' || !ort.env || !ort.env.wasm) return;
+  const base = await _resolveLocalOrCdnBase(ONNX_WASM_LOCAL, ONNX_WASM_CDN, 'ort-wasm.wasm');
+  ort.env.wasm.wasmPaths = base;
+}
+
+async function _ensurePdfWorkerSrc() {
+  if (typeof pdfjsLib === 'undefined') return;
+  const base = await _resolveLocalOrCdnBase('./vendor/pdfjs/', 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/', 'pdf.worker.min.js');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.js';
+}
+
+/** Import only — never disable the canvas/overlay (that blocks all editing). */
+function _setImportEnabled(enabled) {
+  ['btn-import', 'sidebar-upload-btn'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
+  });
+
+  const welcome = document.getElementById('welcome-drop');
+  if (welcome && !AppState.isLoaded) {
+    welcome.style.pointerEvents = enabled ? 'auto' : 'none';
+    welcome.style.opacity = enabled ? '1' : '0.55';
+  }
+}
+
+/** After an image + blocks load, ensure nothing invisible blocks taps on text fields. */
+function _ensureEditorInteractive() {
+  const canvasArea = document.getElementById('canvas-area');
+  const overlay = document.getElementById('overlay');
+  const welcome = document.getElementById('welcome-drop');
+
+  if (canvasArea) canvasArea.style.pointerEvents = 'auto';
+  if (overlay) overlay.style.pointerEvents = 'auto';
+  if (welcome) {
+    welcome.style.display = 'none';
+    welcome.style.pointerEvents = 'none';
+  }
+}
+
+function _refreshUiLock() {
+  _setImportEnabled(true);
+
+  if (AIRuntime.isReady()) {
+    _setStatusOk('AI ready — import or tap text to edit');
+  } else if (AIRuntime.isCvReady() && !AIRuntime.isOnnxReady()) {
+    _setStatusOk('Ready — ONNX offline, editing works');
+  } else if (AIRuntime.isCvReady()) {
+    _setStatusOk('Ready — tap text blocks to edit');
+  }
+}
+
 /**
  * Called by the `onload` attribute of the <script async src="opencv.js"> tag.
  * OpenCV.js sets cv.onRuntimeInitialized internally; we hook into it here.
  */
 function onOpenCvLoad() {
-  // cv may already be ready if the script was cached
   if (typeof cv !== 'undefined') {
     if (cv.getBuildInformation) {
-      // Already initialised (cached/synchronous load)
       _markCvReady();
     } else {
-      // Async WASM compile — wait for the callback
       cv.onRuntimeInitialized = _markCvReady;
     }
   }
 }
 
 function _markCvReady() {
+  if (cvReady) return;
   cvReady = true;
   console.info('[PixelScribe] OpenCV.js WASM ready.');
   _setBadge('badge-cv', 'ready', 'CV ready');
+  AIRuntime.markCvReady();
 }
 
 
 /* ══════════════════════════════════════════════════════════════════════
    EDGE ML  — ONNX Runtime Web font classifier
-   Model:  ../models/font_classifier.onnx
+   Model:  ./models/font_classifier.onnx
    Input:  Float32 [1, 1, 64, 64]  grayscale, normalised 0–1
    Output: Float32 [1, 10]          raw logits → argmax → FONT_LABELS[i]
 ══════════════════════════════════════════════════════════════════════ */
@@ -147,32 +346,37 @@ const EdgeML = (() => {
    * @returns {Promise<void>}
    */
   async function init() {
-    if (_session) return;   // already loaded
+    if (_session) {
+      AIRuntime.markOnnxReady();
+      return;
+    }
 
     if (typeof ort === 'undefined') {
-      console.warn('[EdgeML] onnxruntime-web not loaded — font prediction disabled.');
+      const err = new Error('onnxruntime-web is not loaded (check CDN script in index.html).');
+      console.warn('[EdgeML]', err.message);
       _setBadge('badge-onnx', 'error', 'ONNX unavailable');
+      AIRuntime.markOnnxFailed(err);
       return;
     }
 
     try {
-      // Configure ONNX Runtime to use WASM execution provider.
-      // The .wasm files are loaded from the same CDN as ort.min.js.
-      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+      await _setOnnxWasmPaths();
 
       _setBadge('badge-onnx', 'loading', 'ONNX loading…');
 
       _session = await ort.InferenceSession.create(
-        '../models/font_classifier.onnx',
+        FONT_CLASSIFIER_MODEL_URL,
         { executionProviders: ['wasm'] }
       );
 
       console.info('[EdgeML] ONNX session ready. Input:', _session.inputNames, 'Output:', _session.outputNames);
       _setBadge('badge-onnx', 'ready', 'ONNX ready');
+      AIRuntime.markOnnxReady();
     } catch (err) {
       console.warn('[EdgeML] Could not load ONNX model:', err.message);
       _setBadge('badge-onnx', 'error', 'ONNX error');
       _session = null;
+      AIRuntime.markOnnxFailed(err);
     }
   }
 
@@ -276,37 +480,200 @@ function resolveFontStack(fontFamily) {
 ══════════════════════════════════════════════════════════════════════ */
 const ImageProcessor = (() => {
   async function inpaintRegion(imageElement, bbox) {
-    if (!cvReady) {
-      throw new Error('OpenCV is not loaded yet.');
+    if (!cvReady || typeof cv === 'undefined') {
+      throw new Error('OpenCV.js is not loaded yet.');
     }
 
-    let src = cv.imread(imageElement);
-    let mask = new cv.Mat(src.rows, src.cols, cv.CV_8UC1, new cv.Scalar(0));
+    let src;
+    let mask;
+    let dst;
 
-    // Add 4px padding/dilation to the bounding box
-    let x1 = Math.max(0, bbox.x - 4);
-    let y1 = Math.max(0, bbox.y - 4);
-    let x2 = Math.min(src.cols, bbox.x + bbox.width + 4);
-    let y2 = Math.min(src.rows, bbox.y + bbox.height + 4);
+    try {
+      src = cv.imread(imageElement);
+      mask = new cv.Mat(src.rows, src.cols, cv.CV_8UC1, new cv.Scalar(0));
 
-    cv.rectangle(mask, new cv.Point(x1, y1), new cv.Point(x2, y2), new cv.Scalar(255), -1, cv.LINE_8, 0);
+      const x1 = Math.max(0, bbox.x - 4);
+      const y1 = Math.max(0, bbox.y - 4);
+      const x2 = Math.min(src.cols, bbox.x + bbox.width + 4);
+      const y2 = Math.min(src.rows, bbox.y + bbox.height + 4);
 
-    let dst = new cv.Mat();
-    cv.inpaint(src, mask, dst, 3, cv.INPAINT_TELEA);
+      cv.rectangle(mask, new cv.Point(x1, y1), new cv.Point(x2, y2), new cv.Scalar(255), -1, cv.LINE_8, 0);
 
-    // Render back to a hidden canvas to update the main image source
-    let hiddenCanvas = document.createElement('canvas');
-    cv.imshow(hiddenCanvas, dst);
-    AppState.bgSrc = hiddenCanvas.toDataURL('image/png');
-    imageElement.src = AppState.bgSrc;
+      dst = new cv.Mat();
+      cv.inpaint(src, mask, dst, 3, cv.INPAINT_TELEA);
 
-    // CRITICAL: Prevent WebAssembly memory leaks
-    src.delete();
-    mask.delete();
-    dst.delete();
+      const hiddenCanvas = document.createElement('canvas');
+      cv.imshow(hiddenCanvas, dst);
+      AppState.bgSrc = hiddenCanvas.toDataURL('image/png');
+      imageElement.src = AppState.bgSrc;
+    } catch (err) {
+      _aiAlert('OpenCV inpaint', err);
+      throw err;
+    } finally {
+      if (src) src.delete();
+      if (mask) mask.delete();
+      if (dst) dst.delete();
+    }
   }
 
   return { inpaintRegion };
+})();
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   OFFLINE OCR — TextDetector (native) → Tesseract.js fallback
+══════════════════════════════════════════════════════════════════════ */
+const OfflineOCR = (() => {
+  let _engine = 'none';
+  let _initPromise = null;
+  let _worker = null;
+  let _lastError = null;
+
+  async function init() {
+    if (_initPromise) return _initPromise;
+    _initPromise = _initInternal();
+    return _initPromise;
+  }
+
+  function engine() {
+    return _engine;
+  }
+
+  function isReady() {
+    return _engine !== 'none';
+  }
+
+  function lastError() {
+    return _lastError;
+  }
+
+  async function _initInternal() {
+    _lastError = null;
+
+    if (typeof TextDetector !== 'undefined') {
+      _engine = 'text-detector';
+      return;
+    }
+
+    try {
+      if (typeof Tesseract === 'undefined') {
+        await _loadScript(`${OFFLINE_OCR_TESSERACT_BASE}/tesseract.min.js`);
+      }
+      if (typeof Tesseract === 'undefined') {
+        throw new Error('Tesseract.js not found. Add local assets under /vendor/tesseract.');
+      }
+
+      _worker = await Tesseract.createWorker({
+        logger: (m) => {
+          if (m && m.status === 'recognizing text') {
+            _showProgress(Math.min(60, Math.max(10, Math.round(m.progress * 60))));
+          }
+        },
+        workerPath: `${OFFLINE_OCR_TESSERACT_BASE}/worker.min.js`,
+        corePath: `${OFFLINE_OCR_TESSERACT_BASE}/tesseract-core.wasm.js`,
+        langPath: OFFLINE_OCR_TESSDATA_BASE,
+      });
+      await _worker.loadLanguage(OFFLINE_OCR_LANG);
+      await _worker.initialize(OFFLINE_OCR_LANG);
+
+      _engine = 'tesseract';
+    } catch (err) {
+      _engine = 'none';
+      _lastError = err;
+      throw err;
+    }
+  }
+
+  async function recognize(imgEl) {
+    if (!_initPromise) await init();
+    if (_engine === 'text-detector') return _recognizeWithTextDetector(imgEl);
+    if (_engine === 'tesseract') return _recognizeWithTesseract(imgEl);
+    throw (_lastError || new Error('Offline OCR engine not available.'));
+  }
+
+  function _rasterizeForOcr(imgEl) {
+    const w = imgEl.naturalWidth || imgEl.width;
+    const h = imgEl.naturalHeight || imgEl.height;
+    const scale = Math.min(1, OFFLINE_OCR_MAX_DIM / Math.max(w, h));
+    if (scale >= 1) return { source: imgEl, scale, width: w, height: h };
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+    return { source: canvas, scale, width: canvas.width, height: canvas.height };
+  }
+
+  function _normalizeBox(x, y, w, h, maxW, maxH) {
+    const nx = Math.max(0, Math.min(x, maxW - 1));
+    const ny = Math.max(0, Math.min(y, maxH - 1));
+    const nw = Math.max(1, Math.min(w, maxW - nx));
+    const nh = Math.max(1, Math.min(h, maxH - ny));
+    return { x: nx, y: ny, w: nw, h: nh };
+  }
+
+  async function _recognizeWithTextDetector(imgEl) {
+    const { source, scale } = _rasterizeForOcr(imgEl);
+    const detector = new TextDetector();
+    const results = await detector.detect(source);
+
+    const blocks = results.map((r) => {
+      const box = r.boundingBox || { x: 0, y: 0, width: 0, height: 0 };
+      const x = Math.round(box.x / scale);
+      const y = Math.round(box.y / scale);
+      const w = Math.round(box.width / scale);
+      const h = Math.round(box.height / scale);
+      const norm = _normalizeBox(x, y, w, h, imgEl.naturalWidth, imgEl.naturalHeight);
+      return {
+        text: (r.rawValue || r.text || '').trim(),
+        x: norm.x,
+        y: norm.y,
+        w: norm.w,
+        h: norm.h,
+        confidence: 0.6,
+      };
+    }).filter(b => b.text.length > 0);
+
+    const plainText = results
+      .map((r) => (r.rawValue || r.text || '').trim())
+      .filter(Boolean)
+      .join('\n');
+
+    return { blocks, plainText, engine: 'text-detector' };
+  }
+
+  async function _recognizeWithTesseract(imgEl) {
+    if (!_worker) throw new Error('Tesseract worker not initialised.');
+    const { source, scale } = _rasterizeForOcr(imgEl);
+    const { data } = await _worker.recognize(source);
+
+    const lines = (data && data.lines && data.lines.length)
+      ? data.lines
+      : (data && data.words ? data.words : []);
+
+    const blocks = lines.map((line) => {
+      const bbox = line.bbox || { x0: 0, y0: 0, x1: 0, y1: 0 };
+      const x = Math.round(bbox.x0 / scale);
+      const y = Math.round(bbox.y0 / scale);
+      const w = Math.round((bbox.x1 - bbox.x0) / scale);
+      const h = Math.round((bbox.y1 - bbox.y0) / scale);
+      const norm = _normalizeBox(x, y, w, h, imgEl.naturalWidth, imgEl.naturalHeight);
+      return {
+        text: (line.text || '').trim(),
+        x: norm.x,
+        y: norm.y,
+        w: norm.w,
+        h: norm.h,
+        confidence: typeof line.confidence === 'number' ? Math.max(0, Math.min(1, line.confidence / 100)) : 0.6,
+      };
+    }).filter(b => b.text.length > 0);
+
+    const plainText = (data && data.text ? data.text.trim() : '');
+    return { blocks, plainText, engine: 'tesseract' };
+  }
+
+  return { init, recognize, isReady, engine, lastError };
 })();
 
 
@@ -324,6 +691,8 @@ const AppState = {
   scaleFactor:  1,
   zoomLevel:    1,
   isLoaded:     false,
+  ocrText:      '',
+  ocrEngine:    'none',
 
   clear() {
     this.payload     = null;
@@ -336,6 +705,8 @@ const AppState = {
     this.scaleFactor = 1;
     this.zoomLevel   = 1;
     this.isLoaded    = false;
+    this.ocrText      = '';
+    this.ocrEngine    = 'none';
   }
 };
 
@@ -407,7 +778,8 @@ const ScaleEngine = (() => {
     const img = document.getElementById('canvas-img');
     if (!img || !AppState.imageW) return;
     const rendered = img.getBoundingClientRect();
-    AppState.scaleFactor = rendered.width / AppState.imageW;
+    const sf = rendered.width / AppState.imageW;
+    AppState.scaleFactor = (sf > 0 && isFinite(sf)) ? sf : 1;
     if (AppState.liveBlocks.length) OverlayEngine.repositionAll();
   }
 
@@ -486,6 +858,7 @@ const OverlayEngine = (() => {
       live.currentText = newText;
       const layerTextEl = document.getElementById(`lyr-text-${live.id}`);
       if (layerTextEl) layerTextEl.textContent = `"${newText}"`;
+      _setOcrTextFromBlocks(AppState.liveBlocks.map((b) => ({ text: b.currentText })));
     });
 
     let _clickCount = 0;
@@ -495,10 +868,12 @@ const OverlayEngine = (() => {
         _selectAllText(el);
         setTimeout(() => { _clickCount = 0; }, 600);
       } else if (_clickCount === 2) {
-        // Double-click to erase original text via inpainting
         const imgEl = document.getElementById('canvas-img');
         if (imgEl && !live.inpainted) {
           try {
+            if (!AIRuntime.isCvReady()) {
+              await AIRuntime.waitUntilReady();
+            }
             await ImageProcessor.inpaintRegion(imgEl, {
               x: live.x, y: live.y, width: live.w, height: live.h
             });
@@ -514,6 +889,20 @@ const OverlayEngine = (() => {
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { el.blur(); e.preventDefault(); }
     });
+
+    // Capacitor / Android WebView: touch often does not focus contenteditable via click alone
+    el.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      _setActive(live.id);
+    }, { passive: true });
+
+    el.addEventListener('touchend', (e) => {
+      e.stopPropagation();
+      if (document.activeElement !== el) {
+        el.focus();
+        _selectAllText(el);
+      }
+    }, { passive: true });
 
     return el;
   }
@@ -730,10 +1119,19 @@ const LayerPanel = (() => {
       meta.textContent = live.font_family || `${live.size}px`;
 
       item.append(swatch, text, meta);
-      item.addEventListener('click', () => {
+      const focusBlock = () => {
         const field = document.getElementById(`field-${live.id}`);
-        if (field) { field.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); field.focus(); }
+        if (field) {
+          field.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          field.focus();
+        }
         OverlayEngine.setActive(live.id);
+        if (typeof closeMobilePanels === 'function') closeMobilePanels();
+      };
+      item.addEventListener('click', focusBlock);
+      item.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        focusBlock();
       });
 
       list.appendChild(item);
@@ -905,12 +1303,11 @@ const Toast = (() => {
  */
 async function _renderPdfToImage(file) {
   if (typeof pdfjsLib === 'undefined') {
-    throw new Error('PDF.js is not loaded. Check the CDN script tag in index.html.');
+    throw new Error('PDF.js is not loaded. Add local PDF.js assets or enable CDN access.');
   }
 
-  // Ensure worker path is configured (safe to set more than once)
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  // Ensure worker path is configured (prefer local if available)
+  await _ensurePdfWorkerSrc();
 
   // Read the file as an ArrayBuffer
   const arrayBuffer = await file.arrayBuffer();
@@ -940,6 +1337,272 @@ async function _renderPdfToImage(file) {
   const src = offCanvas.toDataURL('image/jpeg', 0.92);
 
   return { src, width: offCanvas.width, height: offCanvas.height };
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════
+  OPTIONAL PYTHON BACKEND  (OCR + inpaint → editable blocks)
+  Used as a fallback when offline OCR is unavailable or insufficient.
+══════════════════════════════════════════════════════════════════════ */
+
+function getApiBaseUrl() {
+  return (localStorage.getItem(API_BASE_STORAGE_KEY) || '').trim().replace(/\/$/, '');
+}
+
+function setApiBaseUrl(url) {
+  const trimmed = (url || '').trim().replace(/\/$/, '');
+  if (trimmed) localStorage.setItem(API_BASE_STORAGE_KEY, trimmed);
+  else localStorage.removeItem(API_BASE_STORAGE_KEY);
+}
+
+function configureOcrServer() {
+  const entered = window.prompt(
+    'OCR server URL (optional fallback):\n\n' +
+    '• Phone on same Wi-Fi: http://YOUR_PC_IP:8000\n' +
+    '• Android emulator: http://10.0.2.2:8000\n' +
+    '• Browser on this PC: http://localhost:8000\n\n' +
+    'Leave empty to keep everything offline.',
+    getApiBaseUrl() || 'http://192.168.1.100:8000'
+  );
+  if (entered === null) return;
+  setApiBaseUrl(entered);
+  if (getApiBaseUrl()) {
+    Toast.show('OCR server set: ' + getApiBaseUrl(), 'success', 4000);
+  } else {
+    Toast.show('OCR server cleared — offline mode', 'info');
+  }
+  if (typeof closeMobileMore === 'function') closeMobileMore();
+}
+
+async function _dataUriToBlob(dataUri) {
+  const res = await fetch(dataUri);
+  return res.blob();
+}
+
+function _readFileAsDataUri(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = () => reject(new Error('FileReader failed.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function _loadImageElement(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Image failed to load for OCR.'));
+    img.src = src;
+  });
+}
+
+function _finalizeOcrBlocks(blocks, imageW, imageH) {
+  const result = (blocks || []).map((b) => {
+    const w = Math.max(2, Math.round(b.w || 0));
+    const h = Math.max(2, Math.round(b.h || 0));
+    const x = Math.max(0, Math.min(Math.round(b.x || 0), imageW - w));
+    const y = Math.max(0, Math.min(Math.round(b.y || 0), imageH - h));
+    return {
+      text: (b.text || '').trim(),
+      x,
+      y,
+      w,
+      h,
+      color: b.color || '#1A1A1A',
+      bg_color: b.bg_color || 'transparent',
+      size: b.size || Math.max(12, Math.round(h * 0.85)),
+      confidence: typeof b.confidence === 'number' ? b.confidence : 0.5,
+      font_family: b.font_family || 'Arial',
+    };
+  }).filter(b => b.text.length > 0);
+
+  if (result.length) return result;
+
+  const fallbackW = Math.max(120, Math.round(imageW * 0.7));
+  const fallbackH = Math.max(28, Math.round(imageH * 0.08));
+  return [{
+    text: 'Edit text',
+    x: Math.round((imageW - fallbackW) / 2),
+    y: Math.round(imageH * 0.1),
+    w: fallbackW,
+    h: fallbackH,
+    color: '#1A1A1A',
+    bg_color: 'transparent',
+    size: Math.max(14, Math.round(fallbackH * 0.7)),
+    confidence: 0,
+    font_family: 'Arial',
+  }];
+}
+
+async function _processImageWithOfflineOcr(src, naturalW, naturalH) {
+  _showProgress(20);
+  const imgEl = await _loadImageElement(src);
+  const ocr = await OfflineOCR.recognize(imgEl);
+
+  const imageW = naturalW || imgEl.naturalWidth || imgEl.width;
+  const imageH = naturalH || imgEl.naturalHeight || imgEl.height;
+
+  const blocks = _finalizeOcrBlocks(ocr.blocks, imageW, imageH);
+  _showProgress(70);
+
+  return {
+    bg_image: src,
+    image_w: imageW,
+    image_h: imageH,
+    blocks,
+    ocr_text: ocr.plainText || blocks.map(b => b.text).join('\n'),
+    ocr_engine: ocr.engine,
+  };
+}
+
+async function _buildFallbackPayload(src, naturalW, naturalH) {
+  const imgEl = await _loadImageElement(src);
+  const imageW = naturalW || imgEl.naturalWidth || imgEl.width;
+  const imageH = naturalH || imgEl.naturalHeight || imgEl.height;
+  const blocks = _finalizeOcrBlocks([], imageW, imageH);
+
+  return {
+    bg_image: src,
+    image_w: imageW,
+    image_h: imageH,
+    blocks,
+    ocr_text: blocks.map((b) => b.text).filter(Boolean).join('\n'),
+    ocr_engine: 'fallback',
+  };
+}
+
+function _setOcrText(text) {
+  const clean = (text || '').trim();
+  AppState.ocrText = clean;
+  const el = document.getElementById('ocr-text-output');
+  if (el) el.value = clean;
+}
+
+function _setOcrTextFromBlocks(blocks) {
+  const text = (blocks || [])
+    .map((b) => (b && b.text ? String(b.text).trim() : ''))
+    .filter(Boolean)
+    .join('\n');
+  _setOcrText(text);
+}
+
+async function copyOcrText() {
+  const text = AppState.ocrText || '';
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    Toast.show('OCR text copied', 'success');
+  } catch (err) {
+    const textarea = document.getElementById('ocr-text-output');
+    if (textarea) {
+      textarea.focus();
+      textarea.select();
+      document.execCommand('copy');
+      Toast.show('OCR text copied', 'success');
+    }
+  }
+}
+
+/**
+ * POST image bytes to backend /process-image → editor payload with blocks.
+ * @param {Blob} blob
+ * @param {string} filename
+ * @returns {Promise<object>}
+ */
+async function _processImageWithBackend(blob, filename) {
+  const base = getApiBaseUrl();
+  if (!base) {
+    throw new Error('No OCR server configured. Use More → OCR Server to set your PC URL.');
+  }
+
+  const form = new FormData();
+  form.append('file', blob, filename || 'upload.jpg');
+  form.append('languages', 'en');
+  form.append('confidence', '0.25');
+
+  let res;
+  try {
+    res = await fetch(`${base}/process-image`, { method: 'POST', body: form });
+  } catch (err) {
+    throw new Error(
+      'Cannot reach OCR server at ' + base + '. Same Wi‑Fi? Server running? ' + err.message
+    );
+  }
+
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(`Server error ${res.status}: ${detail.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const blocks = (data.blocks || []).map((b) => ({
+    text: b.text,
+    x: b.x,
+    y: b.y,
+    w: b.w,
+    h: b.h,
+    color: b.color || '#000000',
+    bg_color: b.bg_color,
+    size: b.size || Math.max(12, b.h || 16),
+    confidence: b.confidence,
+    font_family: b.font_family || 'Arial',
+  }));
+
+  return {
+    bg_image: data.image_b64,
+    image_w: data.image_w,
+    image_h: data.image_h,
+    blocks,
+    ocr_text: blocks.map((b) => b.text).filter(Boolean).join('\n'),
+    ocr_engine: 'backend',
+  };
+}
+
+/** PDF page 1 → JPEG → backend OCR (when server URL is set). */
+async function _processPdfFile(file) {
+  Toast.show('Rendering PDF page 1…', 'info');
+  _showProgress(10);
+
+  const { src, width, height } = await _renderPdfToImage(file);
+  _showProgress(35);
+  try {
+    const payload = await _processImageWithOfflineOcr(src, width, height);
+    loadPayload(payload);
+    closeModal();
+    Toast.show(
+      `PDF ready — ${payload.blocks.length} editable text block(s)`,
+      'success',
+      4000
+    );
+  } catch (err) {
+    console.warn('[PDF] Offline OCR failed:', err);
+    const apiBase = getApiBaseUrl();
+    if (apiBase) {
+      Toast.show('Sending page to OCR server…', 'info');
+      _showProgress(55);
+      const blob = await _dataUriToBlob(src);
+      const payload = await _processImageWithBackend(blob, file.name.replace(/\.pdf$/i, '.jpg') || 'page.jpg');
+      _showProgress(85);
+      loadPayload(payload);
+      closeModal();
+      Toast.show(
+        `PDF ready — ${payload.blocks.length} editable text block(s)`,
+        'success',
+        4000
+      );
+      return;
+    }
+
+    const fallback = await _buildFallbackPayload(src, width, height);
+    loadPayload(fallback);
+    closeModal();
+    Toast.show(
+      'Offline OCR not ready. Added a manual text block instead.',
+      'error',
+      7000
+    );
+  }
 }
 
 
@@ -976,6 +1639,8 @@ function loadPayload(payload) {
   AppState.payload = payload;
   AppState.blocks  = payload.blocks;
   AppState.bgSrc   = payload.bg_image;
+  AppState.ocrEngine = payload.ocr_engine || AppState.ocrEngine || 'none';
+  if (payload.ocr_text) _setOcrText(payload.ocr_text);
 
   const img = document.getElementById('canvas-img');
   const ws  = document.getElementById('workspace');
@@ -989,29 +1654,37 @@ function loadPayload(payload) {
     AppState.isLoaded = true;
 
     _showProgress(50);
-    ScaleEngine.recompute();
-
-    // ── Edge AI: run font classifier on blocks that lack font_family ──
-    //
-    // Previously the Python backend (text_pipeline.py FontClassifier)
-    // did this. Now EdgeML.predictFont() runs the same ONNX model in
-    // the browser via WASM — no server round-trip.
-    //
-    // We clone the blocks array and enrich each entry with a predicted
-    // font_family before handing it to OverlayEngine.renderAll().
-    const enrichedBlocks = await _enrichBlocksWithFonts(img, payload.blocks);
-
-    OverlayEngine.renderAll(enrichedBlocks);
 
     document.getElementById('welcome-drop').style.display = 'none';
     ws.style.display = 'block';
 
+    let enrichedBlocks = payload.blocks;
+    try {
+      enrichedBlocks = await _enrichBlocksWithFonts(img, payload.blocks);
+    } catch (err) {
+      console.warn('[PixelScribe] Font enrichment skipped:', err);
+      enrichedBlocks = payload.blocks.map((b) => ({
+        ...b,
+        font_family: b.font_family || b.fontFamily || 'Arial',
+      }));
+    }
+
+    ScaleEngine.recompute();
+    OverlayEngine.renderAll(enrichedBlocks);
+    _ensureEditorInteractive();
+    if (!payload.ocr_text) _setOcrTextFromBlocks(enrichedBlocks);
+
+    requestAnimationFrame(() => {
+      ScaleEngine.recompute();
+    });
+
     _showProgress(90);
 
-    ['btn-export', 'btn-export-2', 'btn-reset'].forEach(id => {
+    ['btn-export', 'btn-export-2', 'btn-export-mobile', 'btn-reset'].forEach(id => {
       const btn = document.getElementById(id);
       if (btn) btn.disabled = false;
     });
+    if (typeof syncMobileButtons === 'function') syncMobileButtons();
 
     _setStatusOk(`${AppState.imageW} × ${AppState.imageH}px`);
     document.getElementById('label-dimensions').textContent =
@@ -1022,7 +1695,11 @@ function loadPayload(payload) {
     _showProgress(100);
     setTimeout(() => _showProgress(0), 400);
 
-    Toast.show(`Loaded ${enrichedBlocks.length} text block(s)`, 'success');
+    if (enrichedBlocks.length === 0) {
+      Toast.show('Image loaded. Import a JSON file with "blocks" to edit text.', 'info', 5000);
+    } else {
+      Toast.show(`Loaded ${enrichedBlocks.length} text block(s) — tap to edit`, 'success');
+    }
     EditorState.clear();
     closeModal();
   };
@@ -1052,16 +1729,20 @@ function loadPayload(payload) {
 async function _enrichBlocksWithFonts(imgEl, blocks) {
   if (!blocks.length) return blocks;
 
+  if (!AIRuntime.isOnnxReady()) {
+    return blocks.map((b) => ({
+      ...b,
+      font_family: b.font_family || b.fontFamily || 'Arial',
+    }));
+  }
+
   const enriched = [];
   for (const block of blocks) {
-    // If the payload already has a font prediction, trust it.
     if (block.font_family && block.font_family !== 'sans-serif') {
       enriched.push({ ...block });
       continue;
     }
 
-    // Run EdgeML inference on this block's bounding box crop.
-    // Falls back to 'Arial' if the model isn't loaded yet.
     const predicted = await EdgeML.predictFont(
       imgEl,
       block.x, block.y, block.w, block.h
@@ -1103,6 +1784,7 @@ function resetAll() {
   OverlayEngine.clearActive();
   PropsPanel.clear();
   LayerPanel.rebuild();
+  _setOcrTextFromBlocks(AppState.liveBlocks.map((b) => ({ text: b.originalText })));
   Toast.show('All edits reset to original', 'info');
 }
 
@@ -1123,7 +1805,7 @@ function switchTab(tab) {
   });
 }
 
-function loadFromModal() {
+async function loadFromModal() {
   if      (_currentTab === 'json')  _loadFromJSON();
   else if (_currentTab === 'image') Toast.show('Drop or select a file in the Image tab', 'info');
   else if (_currentTab === 'url')   _loadFromURL();
@@ -1223,30 +1905,47 @@ async function _processFile(file) {
 
   // ── Raster image (JPEG, PNG, WEBP, BMP) ──────────────────────────
   if (file.type.startsWith('image/')) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const src = e.target.result;
-      const img = new Image();
-      img.onload = () => loadImageOnly(src, img.naturalWidth, img.naturalHeight);
-      img.src = src;
-    };
-    reader.readAsDataURL(file);
+    try {
+      const src = await _readFileAsDataUri(file);
+      const payload = await _processImageWithOfflineOcr(src);
+      loadPayload(payload);
+      closeModal();
+      Toast.show(`Found ${payload.blocks.length} text block(s)`, 'success');
+    } catch (err) {
+      console.warn('[OCR] Offline OCR failed:', err);
+      if (getApiBaseUrl()) {
+        try {
+          Toast.show('Running OCR on server…', 'info');
+          _showProgress(30);
+          const payload = await _processImageWithBackend(file, file.name);
+          _showProgress(85);
+          loadPayload(payload);
+          closeModal();
+          Toast.show(`Found ${payload.blocks.length} text block(s)`, 'success');
+          return;
+        } catch (serverErr) {
+          console.error('[OCR] Server failed:', serverErr);
+          _aiAlert('image OCR', serverErr);
+          _showProgress(0);
+        }
+      }
+
+      const src = await _readFileAsDataUri(file);
+      const fallback = await _buildFallbackPayload(src);
+      loadPayload(fallback);
+      closeModal();
+      Toast.show('Offline OCR not ready. Added a manual text block instead.', 'error', 6000);
+    }
     return;
   }
 
-  // ── PDF — rendered client-side by PDF.js (replaces Python pipeline) ─
+  // ── PDF — page 1 → optional backend OCR for editable blocks ───────
   if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-    Toast.show('Rendering PDF page 1 via PDF.js…', 'info');
-    _showProgress(15);
-
     try {
-      const { src, width, height } = await _renderPdfToImage(file);
-      _showProgress(60);
-      loadImageOnly(src, width, height);
-      Toast.show(`PDF rendered: ${width}×${height}px`, 'success');
+      await _processPdfFile(file);
     } catch (err) {
-      console.error('[PDF] Render failed:', err);
-      Toast.show('PDF render failed: ' + err.message, 'error');
+      console.error('[PDF] Failed:', err);
+      _aiAlert('PDF import', err);
       _showProgress(0);
     }
     return;
@@ -1293,6 +1992,7 @@ function _showProgress(pct) {
  * ──────────────────────────
  * Updates the Edge AI status badges shown in the status bar.
  * @param {'badge-onnx'|'badge-cv'} id
+ * @param {'badge-onnx'|'badge-cv'|'badge-ocr'} id
  * @param {'loading'|'ready'|'error'} state
  * @param {string} text
  */
@@ -1355,6 +2055,27 @@ document.addEventListener('keydown', (e) => {
 (async function init() {
   console.info('[PixelScribe] Edge AI Edition — initialising…');
 
+  _setImportEnabled(true);
+  _setStatusBusy('Loading AI libraries…');
+
+  _setBadge('badge-ocr', 'loading', 'OCR loading...');
+  OfflineOCR.init()
+    .then(() => {
+      const label = OfflineOCR.engine() === 'text-detector'
+        ? 'OCR ready (native)'
+        : 'OCR ready';
+      _setBadge('badge-ocr', 'ready', label);
+    })
+    .catch((err) => {
+      console.warn('[PixelScribe] Offline OCR init failed:', err.message);
+      _setBadge('badge-ocr', 'error', 'OCR missing');
+    });
+
+  const onnxBoot = EdgeML.init();
+  AIRuntime.setOnnxInitPromise(onnxBoot);
+  await onnxBoot;
+  _setImportEnabled(true);
+
   // Wire canvas-area click to deselect blocks
   document.getElementById('canvas-area').addEventListener('click', (e) => {
     if (e.target.id === 'canvas-area' ||
@@ -1363,11 +2084,6 @@ document.addEventListener('keydown', (e) => {
       OverlayEngine.clearActive();
     }
   });
-
-  // ── Boot EdgeML (ONNX Runtime Web) ──────────────────────────────
-  // This replaces the server-side FontClassifier lazy-load in worker.py.
-  // The model loads asynchronously and does not block the UI.
-  await EdgeML.init();
 
   // ── Log keyboard shortcuts ──────────────────────────────────────
   console.info(
@@ -1387,19 +2103,31 @@ document.addEventListener('keydown', (e) => {
     _loadDemoPayload();
   }
 
-  // ── OpenCV initialization listener (Interval Check) ───────────────
+  // Fallback: Capacitor/WebView sometimes misses onOpenCvLoad / onRuntimeInitialized
   const cvInterval = setInterval(() => {
-    if (typeof cv !== 'undefined' && typeof cv.imread === 'function') {
+    if (typeof cv !== 'undefined' && typeof cv.imread === 'function' && !cvReady) {
       clearInterval(cvInterval);
-      if (!cvReady) {
-        cvReady = true;
-        console.info('[PixelScribe] OpenCV.js WASM fully initialized.');
-        if (typeof _setBadge === 'function') {
-          _setBadge('badge-cv', 'ready', 'CV ready');
-        }
-      }
+      console.info('[PixelScribe] OpenCV.js ready (interval fallback).');
+      _markCvReady();
     }
-  }, 100);
+  }, 200);
+
+  setTimeout(() => clearInterval(cvInterval), 120000);
+
+  try {
+    await AIRuntime.waitUntilReady(120000);
+    console.info('[PixelScribe] AI runtime ready (OpenCV + ONNX).');
+  } catch (err) {
+    console.warn('[PixelScribe] AI partial/unavailable:', err.message);
+    _setImportEnabled(true);
+    if (AIRuntime.isCvReady()) {
+      _setStatusOk('Ready — import & edit (some AI features limited)');
+    } else {
+      _setStatusOk('Ready — import files (AI still loading)');
+    }
+  }
+
+  _refreshUiLock();
 })();
 
 

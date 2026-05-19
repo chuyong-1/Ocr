@@ -1,0 +1,4 @@
+# Place PDF.js assets here for offline use.
+# Expected files:
+# - pdf.min.js
+# - pdf.worker.min.js

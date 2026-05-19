@@ -1,5 +1,14 @@
 {
   "appId": "com.pixelscribe.app",
   "appName": "PixelScribe",
-  "webDir": "www"
+  "webDir": "www",
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "cleartext": true
+  }
 }
