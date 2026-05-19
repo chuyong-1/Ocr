@@ -272,6 +272,45 @@ function resolveFontStack(fontFamily) {
 
 
 /* ══════════════════════════════════════════════════════════════════════
+   IMAGE PROCESSOR — OpenCV.js Inpainting
+══════════════════════════════════════════════════════════════════════ */
+const ImageProcessor = (() => {
+  async function inpaintRegion(imageElement, bbox) {
+    if (!cvReady) {
+      throw new Error('OpenCV is not loaded yet.');
+    }
+
+    let src = cv.imread(imageElement);
+    let mask = new cv.Mat(src.rows, src.cols, cv.CV_8UC1, new cv.Scalar(0));
+
+    // Add 4px padding/dilation to the bounding box
+    let x1 = Math.max(0, bbox.x - 4);
+    let y1 = Math.max(0, bbox.y - 4);
+    let x2 = Math.min(src.cols, bbox.x + bbox.width + 4);
+    let y2 = Math.min(src.rows, bbox.y + bbox.height + 4);
+
+    cv.rectangle(mask, new cv.Point(x1, y1), new cv.Point(x2, y2), new cv.Scalar(255), -1, cv.LINE_8, 0);
+
+    let dst = new cv.Mat();
+    cv.inpaint(src, mask, dst, 3, cv.INPAINT_TELEA);
+
+    // Render back to a hidden canvas to update the main image source
+    let hiddenCanvas = document.createElement('canvas');
+    cv.imshow(hiddenCanvas, dst);
+    AppState.bgSrc = hiddenCanvas.toDataURL('image/png');
+    imageElement.src = AppState.bgSrc;
+
+    // CRITICAL: Prevent WebAssembly memory leaks
+    src.delete();
+    mask.delete();
+    dst.delete();
+  }
+
+  return { inpaintRegion };
+})();
+
+
+/* ══════════════════════════════════════════════════════════════════════
    APP STATE — single source of truth
 ══════════════════════════════════════════════════════════════════════ */
 const AppState = {
@@ -450,11 +489,25 @@ const OverlayEngine = (() => {
     });
 
     let _clickCount = 0;
-    el.addEventListener('click', () => {
+    el.addEventListener('click', async () => {
       _clickCount++;
       if (_clickCount === 1) {
         _selectAllText(el);
         setTimeout(() => { _clickCount = 0; }, 600);
+      } else if (_clickCount === 2) {
+        // Double-click to erase original text via inpainting
+        const imgEl = document.getElementById('canvas-img');
+        if (imgEl && !live.inpainted) {
+          try {
+            await ImageProcessor.inpaintRegion(imgEl, {
+              x: live.x, y: live.y, width: live.w, height: live.h
+            });
+            live.inpainted = true;
+            Toast.show('Original text erased', 'success');
+          } catch (err) {
+            Toast.show('Inpaint failed: ' + err.message, 'error');
+          }
+        }
       }
     });
 
@@ -1333,6 +1386,20 @@ document.addEventListener('keydown', (e) => {
   if (new URLSearchParams(window.location.search).get('demo') === '1') {
     _loadDemoPayload();
   }
+
+  // ── OpenCV initialization listener (Interval Check) ───────────────
+  const cvInterval = setInterval(() => {
+    if (typeof cv !== 'undefined' && typeof cv.imread === 'function') {
+      clearInterval(cvInterval);
+      if (!cvReady) {
+        cvReady = true;
+        console.info('[PixelScribe] OpenCV.js WASM fully initialized.');
+        if (typeof _setBadge === 'function') {
+          _setBadge('badge-cv', 'ready', 'CV ready');
+        }
+      }
+    }
+  }, 100);
 })();
 
 
