@@ -5,6 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PixelScribe — Content-Aware Text Editor</title>
 
+  <!-- ═══════════════════════════════════════════════════════════════
+       EDGE AI LIBRARIES  (WebAssembly — no server required)
+  ════════════════════════════════════════════════════════════════ -->
+
+  <!-- ONNX Runtime Web: runs font_classifier.onnx in the browser via WASM -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+  <!-- PDF.js: renders uploaded PDF pages to a canvas for image extraction -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+  <!-- OpenCV.js: WASM build of OpenCV for cv2.inpaint / cvtColor in-browser
+       async so it doesn't block the initial page render; see cvReady flag
+       in main.js which is set true once the Module onRuntimeInitialized fires -->
+  <script async src="https://docs.opencv.org/4.8.0/opencv.js"
+          onload="onOpenCvLoad()"
+          onerror="console.error('[PixelScribe] OpenCV.js failed to load')">
+  </script>
+
+  <!-- PDF.js: point the web worker at the matching CDN worker bundle -->
+  <script>
+    // Must run after pdf.min.js is parsed; inline script tags execute in order.
+    if (typeof pdfjsLib !== 'undefined') {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
+
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
 
@@ -367,7 +394,6 @@
       position: relative;
       display: none;  /* shown after image loads */
       flex-shrink: 0;
-      /* Dramatic layered shadow for depth */
       box-shadow:
         0 0 0 1px rgba(255,255,255,0.04),
         0 4px 6px rgba(0,0,0,0.3),
@@ -665,10 +691,30 @@
       border-radius: 50%;
       background: #4A4A62;
     }
-    .status-dot.green { background: #22C55E; }
-    .status-dot.amber { background: #F59E0B; }
-    .status-dot.red   { background: #EF4444; }
+    .status-dot.green  { background: #22C55E; }
+    .status-dot.amber  { background: #F59E0B; }
+    .status-dot.red    { background: #EF4444; }
     .status-dot.purple { background: #6C63FF; }
+
+    /* ════════════════════════════════════════════════════════
+       EDGE AI STATUS BADGE  (shown in status bar)
+    ════════════════════════════════════════════════════════ */
+    #edge-ai-status {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    #edge-ai-status .badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8.5px;
+      padding: 1px 6px;
+      border-radius: 3px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .badge-loading { background: rgba(245,158,11,0.15); color: #F59E0B; border: 1px solid rgba(245,158,11,0.3); }
+    .badge-ready   { background: rgba(34,197,94,0.12);  color: #22C55E; border: 1px solid rgba(34,197,94,0.25); }
+    .badge-error   { background: rgba(239,68,68,0.12);  color: #EF4444; border: 1px solid rgba(239,68,68,0.25); }
 
     /* ════════════════════════════════════════════════════════
        PROGRESS BAR
@@ -726,7 +772,7 @@
     .toast.info    { border-left: 3px solid #6C63FF; }
 
     /* ════════════════════════════════════════════════════════
-       LOAD JSON MODAL
+       MODAL
     ════════════════════════════════════════════════════════ */
     #modal-overlay {
       position: fixed;
@@ -873,9 +919,7 @@
     .hidden  { display: none !important; }
     .divider { height: 1px; background: #1A1A24; margin: 0 8px; }
 
-    [data-tip] {
-      position: relative;
-    }
+    [data-tip] { position: relative; }
     [data-tip]:hover::after {
       content: attr(data-tip);
       position: absolute;
@@ -922,17 +966,13 @@
   <!-- ═══════════════════════════════ TOP BAR ═══════════════════════════════ -->
   <header id="topbar">
 
-    <!-- Logo -->
     <div class="wordmark">PIXEL<em>SCRIBE</em></div>
     <div class="topbar-sep"></div>
-    <div class="topbar-tag">content-aware editor</div>
+    <div class="topbar-tag">edge ai · offline · wasm</div>
 
     <div class="topbar-sep"></div>
 
-    <!-- File actions -->
     <div class="toolbar-group">
-      <!-- CHANGED: id="btn-open" → id="btn-import", text "Open" → "Import",
-           data-tip updated to reflect accepted file types -->
       <button class="tool-btn" id="btn-import" data-tip="Import JSON payload, JPG, or PDF" onclick="openModal()">
         <svg width="13" height="13" fill="none" viewBox="0 0 16 16"><path d="M2 4a1 1 0 011-1h3l1.5 2H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" stroke-width="1.4"/></svg>
         Import
@@ -941,7 +981,6 @@
 
     <div class="topbar-sep"></div>
 
-    <!-- Edit actions -->
     <div class="toolbar-group">
       <button class="tool-btn" id="btn-undo" disabled data-tip="Undo last text change (Ctrl+Z)" onclick="EditorState.undo()">
         <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M3 7l3-3-3-3M3 7h6a4 4 0 010 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -955,7 +994,6 @@
 
     <div class="topbar-sep"></div>
 
-    <!-- Zoom -->
     <div class="toolbar-group">
       <button class="tool-btn" data-tip="Zoom out" onclick="CanvasView.zoom(-0.1)">
         <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M4 7h6M12 12l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -967,10 +1005,8 @@
       <button class="tool-btn" data-tip="Fit to window" onclick="CanvasView.fitToWindow()">Fit</button>
     </div>
 
-    <!-- Spacer -->
     <div style="flex:1"></div>
 
-    <!-- Right actions -->
     <div class="toolbar-group">
       <button class="tool-btn danger" id="btn-reset" disabled data-tip="Reset all edits" onclick="resetAll()">
         <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M3 8A5 5 0 1113 8M3 8l-2-2m2 2l2-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -997,13 +1033,12 @@
       <div class="empty-state" id="empty-state">
         <div class="empty-icon">⬚</div>
         <div class="empty-title">No blocks loaded</div>
-        <div class="empty-sub">Import a JSON payload or<br>drag a JPG to begin</div>
+        <div class="empty-sub">Import a JSON payload or<br>drag a JPG / PDF to begin</div>
       </div>
     </div>
 
     <div class="divider"></div>
 
-    <!-- Quick upload trigger -->
     <div class="upload-btn" onclick="openModal()" id="sidebar-upload-btn">
       <div style="font-size:18px;margin-bottom:4px;opacity:0.4;">⊕</div>
       <div>Import JPG, PDF, or JSON</div>
@@ -1014,13 +1049,11 @@
   <!-- ═══════════════════════════════ CANVAS AREA ════════════════════════════ -->
   <main id="canvas-area" ondragover="handleDragOver(event)" ondrop="handleFileDrop(event)" ondragleave="handleDragLeave()">
 
-    <!-- Welcome overlay -->
     <div id="welcome-drop">
       <div class="welcome-glyph">EDIT<br>TEXT</div>
-      <div class="welcome-cta">Import JSON payload · Drag JPG · Press Ctrl+O</div>
+      <div class="welcome-cta">Import JSON payload · Drag JPG / PDF · Press Ctrl+O</div>
     </div>
 
-    <!-- The editable workspace -->
     <div id="workspace">
       <img id="canvas-img" src="" alt="" />
       <div id="overlay"></div>
@@ -1031,7 +1064,6 @@
   <!-- ═══════════════════════════════ RIGHT PROPS PANEL ══════════════════════ -->
   <aside id="props-panel">
 
-    <!-- Typography -->
     <div class="props-section">
       <div class="props-label">Typography</div>
 
@@ -1075,7 +1107,6 @@
       </button>
     </div>
 
-    <!-- Block coordinates (read-only) -->
     <div class="props-section">
       <div class="props-label">Block Coordinates</div>
       <div class="coord-grid">
@@ -1098,7 +1129,6 @@
       </div>
     </div>
 
-    <!-- Block info -->
     <div class="props-section">
       <div class="props-label">Block Info</div>
       <div class="field-row">
@@ -1109,9 +1139,13 @@
         <span class="field-label">Confidence</span>
         <span id="info-conf" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#6B6B88;">—</span>
       </div>
+      <!-- NEW: shows EdgeML font prediction -->
+      <div class="field-row">
+        <span class="field-label">Font (AI)</span>
+        <span id="info-font-ai" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#9B95FF;">—</span>
+      </div>
     </div>
 
-    <!-- Export section -->
     <div class="props-section" style="margin-top:auto;">
       <div class="props-label">Export</div>
       <button class="tool-btn primary" id="btn-export-2" style="width:100%;justify-content:center;height:36px;"
@@ -1120,7 +1154,7 @@
         Flatten & Download PNG
       </button>
       <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#3A3A52;margin-top:8px;line-height:1.6;text-align:center;">
-        Renders composite at full<br>source resolution. No server calls.
+        Full-resolution composite.<br>100% offline — no server calls.
       </div>
     </div>
 
@@ -1140,21 +1174,26 @@
       <div class="status-dot"></div>
       <span id="label-blocks">0 blocks</span>
     </div>
+    <!-- Edge AI runtime status indicators -->
+    <div id="edge-ai-status" class="status-item">
+      <span id="badge-onnx"  class="badge badge-loading">ONNX loading…</span>
+      <span id="badge-cv"    class="badge badge-loading">CV loading…</span>
+    </div>
     <div class="status-item" style="margin-left:auto">
-      <div class="status-dot"></div>
-      <span>PixelScribe v2 · Offline · No cloud APIs</span>
+      <div class="status-dot purple"></div>
+      <span>PixelScribe v3 · Edge AI · Pure WASM · No server</span>
     </div>
   </div>
 
 </div>
 
-<!-- ═══════════════════════ PROGRESS BAR ═════════════════════════ -->
+<!-- PROGRESS BAR -->
 <div id="progress-track"><div id="progress-fill"></div></div>
 
-<!-- ═══════════════════════ TOAST CONTAINER ══════════════════════ -->
+<!-- TOAST CONTAINER -->
 <div id="toast-container"></div>
 
-<!-- ════════════════════ LOAD / PASTE MODAL ══════════════════════ -->
+<!-- MODAL -->
 <div id="modal-overlay" onclick="if(event.target===this) closeModal()">
   <div class="modal">
     <div class="modal-head">
@@ -1163,40 +1202,41 @@
     </div>
     <div class="modal-body">
 
-      <!-- Tab selector -->
       <div class="tab-row">
-        <button class="tab-btn active" id="tab-json" onclick="switchTab('json')">Paste JSON</button>
-        <button class="tab-btn" id="tab-image" onclick="switchTab('image')">JPG / PDF / JSON file</button>
-        <button class="tab-btn" id="tab-url" onclick="switchTab('url')">Image URL</button>
+        <button class="tab-btn active" id="tab-json"  onclick="switchTab('json')">Paste JSON</button>
+        <button class="tab-btn"        id="tab-image" onclick="switchTab('image')">JPG / PDF / JSON file</button>
+        <button class="tab-btn"        id="tab-url"   onclick="switchTab('url')">Image URL</button>
       </div>
 
       <!-- Tab: Paste JSON -->
       <div id="pane-json">
         <textarea class="modal-textarea" id="json-input"
-          placeholder='{&#10;  "bg_image": "/results/cleaned_job123.jpg",&#10;  "image_w": 2400,&#10;  "image_h": 3000,&#10;  "blocks": [&#10;    { "text": "Hello", "x": 100, "y": 80, "w": 200, "h": 40, "color": "#1A1A1A", "size": 18, "font_family": "Arial" }&#10;  ]&#10;}'></textarea>
+          placeholder='{&#10;  "bg_image": "data:image/jpeg;base64,…",&#10;  "image_w": 2400,&#10;  "image_h": 3000,&#10;  "blocks": [&#10;    { "text": "Hello", "x": 100, "y": 80, "w": 200, "h": 40, "color": "#1A1A1A", "size": 18, "font_family": "Arial" }&#10;  ]&#10;}'></textarea>
         <div class="modal-hint">
-          Paste the full JSON payload from the worker pipeline.<br>
-          The <code style="color:#9B95FF;">bg_image</code> URL will be fetched from your local backend server.
+          Paste the full JSON payload. The <code style="color:#9B95FF;">bg_image</code> field accepts
+          a data URI (base64) or an absolute URL accessible without CORS restrictions.
         </div>
       </div>
 
-      <!-- Tab: Image + JSON file -->
+      <!-- Tab: Image / PDF / JSON file -->
       <div id="pane-image" class="hidden">
         <div id="modal-drop-zone"
              onclick="document.getElementById('file-img-input').click()"
              ondragover="event.preventDefault();this.classList.add('drag-over')"
              ondrop="handleModalDrop(event)"
              ondragleave="this.classList.remove('drag-over')">
-          <!-- CHANGED: accept restricted to .jpg, .jpeg, .pdf, .json only -->
+          <!-- accept JPG, PDF, and JSON only -->
           <input type="file" id="file-img-input" accept=".jpg,.jpeg,.pdf,.json"
                  style="display:none" onchange="handleModalFileInput(event)" />
           <div class="drop-icon">⬆</div>
-          <!-- CHANGED: drop zone copy updated to list allowed types -->
           <div class="drop-text">Drop a JPG, PDF, or JSON file here</div>
-          <div class="drop-sub">JPG · PDF · JSON · max 30 MB</div>
+          <!-- PDF.js renders page 1 of uploaded PDFs to a canvas locally -->
+          <div class="drop-sub">JPG · PDF (rendered via PDF.js) · JSON · max 30 MB</div>
         </div>
         <div class="modal-hint" style="margin-top:10px;">
-          Drop a JPG image to use it as the canvas background, a PDF to send through the backend pipeline, or a .json file to load a full payload.
+          <strong style="color:#9B95FF;">PDF files</strong> are rendered client-side by PDF.js at 3× scale
+          (≈300 DPI). No upload — your file never leaves the browser.<br>
+          <strong style="color:#9B95FF;">JSON files</strong> load a full editor payload directly.
         </div>
       </div>
 
@@ -1208,7 +1248,8 @@
                  style="flex:1;font-size:12px;padding:8px 10px;" />
         </div>
         <div class="modal-hint" style="margin-top:8px;">
-          Direct URL to a cleaned background image. Text blocks can be added via the JSON tab.
+          Direct URL to a cleaned background image. Ensure the server sends CORS headers
+          (<code style="color:#9B95FF;">Access-Control-Allow-Origin: *</code>) or the export will be blocked.
         </div>
       </div>
 
@@ -1221,14 +1262,13 @@
 </div>
 
 <!-- Hidden file input for drag-drop on canvas -->
-<!-- CHANGED: accept restricted to .jpg, .jpeg, .pdf, .json only -->
 <input type="file" id="file-hidden" accept=".jpg,.jpeg,.pdf,.json" style="display:none"
        onchange="handleHiddenFileInput(event)" />
 
 <!-- Hidden canvas for export -->
 <canvas id="export-canvas" style="display:none"></canvas>
 
-<!-- Main JS -->
+<!-- Main JS (edge AI + editor logic) -->
 <script src="main.js"></script>
 
 </body>
