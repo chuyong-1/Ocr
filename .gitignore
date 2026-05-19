@@ -69,3 +69,8 @@ docker-compose.override.yml
 .env.*.local
 *.bak
 *.tmp
+
+# ── Frontend & Capacitor ──────────────────────────────────────
+node_modules/
+ios/
+android/
