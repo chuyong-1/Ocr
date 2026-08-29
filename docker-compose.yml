@@ -8,7 +8,7 @@ version: "3.9"
 #   worker   Celery worker           (background)
 #   redis    Message broker          redis://localhost:6379
 #   flower   Celery monitoring UI    http://localhost:5555
-#   nginx    Static frontend + proxy http://localhost:3000
+#   nginx    Static www/ app + proxy  http://localhost:3000
 #
 # Quick start
 #   docker compose up --build
@@ -38,9 +38,10 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
     volumes:
-      - uploads_vol:/app/data/uploads
-      - results_vol:/app/data/results
-      - ./data/jobs.db:/app/data/jobs.db
+      # Bind the whole data dir: uploads, results and the SQLite jobs.db all
+      # live here. Binding ./data/jobs.db directly would make Docker create a
+      # directory of that name on first run and SQLite would fail to open it.
+      - ./data:/app/data
     depends_on:
       redis:
         condition: service_healthy
@@ -59,9 +60,10 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
     volumes:
-      - uploads_vol:/app/data/uploads
-      - results_vol:/app/data/results
-      - ./data/jobs.db:/app/data/jobs.db
+      # Bind the whole data dir: uploads, results and the SQLite jobs.db all
+      # live here. Binding ./data/jobs.db directly would make Docker create a
+      # directory of that name on first run and SQLite would fail to open it.
+      - ./data:/app/data
     depends_on:
       redis:
         condition: service_healthy
@@ -84,18 +86,14 @@ services:
       - redis
       - worker
 
-  # ── Nginx — serves built frontend + proxies /api and /ws ───
+  # ── Nginx — serves the www/ browser app + proxies /api and /ws ───
   nginx:
     image: nginx:1.25-alpine
     ports:
       - "3000:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./frontend:/usr/share/nginx/html:ro
-      - results_vol:/app/data/results:ro
+      - ./www:/usr/share/nginx/html:ro
+      - ./data/results:/app/data/results:ro
     depends_on:
       - api
-
-volumes:
-  uploads_vol:
-  results_vol:

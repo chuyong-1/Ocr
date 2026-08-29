@@ -1,11 +1,12 @@
 # PixelScribe — Offline Content-Aware Image Text Editor
 
-A fully offline, content-aware tool for removing and replacing text in images.
-No cloud APIs. No subscriptions. Runs entirely on your machine.
+Remove and replace text in images. OCR, background inpainting and font
+classification all run **in your browser** via WebAssembly — no cloud APIs,
+no subscriptions, no server required.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│  Upload image  →  OCR detects text  →  Inpainting erases it        │
+│  Import image/PDF  →  Tesseract detects text  →  OpenCV erases it  │
 │  →  Editable fields overlay the cleaned image  →  Export PNG       │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -15,13 +16,23 @@ No cloud APIs. No subscriptions. Runs entirely on your machine.
 ## Quick Start
 
 ```bash
-# 1. Install Python 3.10+, then:
-chmod +x start.sh && ./start.sh
+npm start
+```
 
-# 2. Open the frontend in your browser:
-open frontend/index.html
+Then open **http://localhost:5173** — or **http://localhost:5173/?demo=1** to
+load a sample document without importing anything.
 
-# 3. Upload an image and click "PROCESS IMAGE"
+That's it. No Python, no build step, no network access. Node 18+ is the only
+requirement, and only to serve the files.
+
+> The app must be served over `http://`, not opened as a `file://` URL.
+> Web Workers, `WebAssembly.instantiateStreaming` and the vendor-asset probes
+> are all blocked on `file://`.
+
+Verify the vendored WASM assets are complete and self-consistent:
+
+```bash
+npm run check
 ```
 
 ---
@@ -29,172 +40,191 @@ open frontend/index.html
 ## Project Structure
 
 ```
-texteditor/
-├── backend/
-│   ├── server.py           ← FastAPI server (Jobs API & WebSockets)
-│   ├── worker.py           ← Celery background worker
-│   ├── text_pipeline.py    ← Core ML pipeline (OCR + inpaint + fonts)
-│   ├── app.py              ← Monolithic/legacy server
-│   └── requirements.txt    ← Python dependencies
-├── frontend/               ← Vanilla JS + Tailwind CSS frontend
-├── models/                 ← ML Models (e.g., font classifier ONNX)
-├── data/                   ← Ephemeral data (uploads, results, SQLite DB)
-├── Start                   ← One-command launcher
-└── readme.md
+Ocr/
+├── www/                        ← the application (this is what ships)
+│   ├── index.html              ← UI, layout and styles
+│   ├── main.js                 ← editor logic + edge-AI orchestration
+│   ├── models/
+│   │   └── font_classifier.onnx     ← 5-class font CNN (canonical copy)
+│   ├── tessdata/
+│   │   └── eng.traineddata          ← OCR language data (uncompressed)
+│   └── vendor/                 ← pinned offline copies of every library
+│       ├── onnx/               ← ONNX Runtime Web 1.26.0 (wasm-only)
+│       ├── opencv/             ← OpenCV.js (inpainting)
+│       ├── pdfjs/              ← PDF.js (PDF → canvas)
+│       └── tesseract/          ← Tesseract.js 4.x (OCR)
+│
+├── server.js                   ← static dev server (correct MIME + HEAD)
+├── scripts/check-assets.js     ← vendor integrity check (`npm run check`)
+├── Start                       ← bash launcher; `--backend` adds the API
+│
+├── backend/                    ← OPTIONAL Python server (see below)
+│   ├── app.py                  ← single-file FastAPI OCR service
+│   ├── server.py               ← jobs API + WebSockets
+│   ├── worker.py               ← Celery worker
+│   ├── text_pipeline.py        ← EasyOCR + inpaint + font pipeline
+│   ├── langgraph_pipeline.py   ← LangGraph orchestration
+│   └── train_font_classifier.py ← trains www/models/font_classifier.onnx
+│
+├── data/                       ← uploads, results, SQLite jobs.db
+├── docker-compose.yml          ← full stack: api + worker + redis + nginx
+└── capacitor.config.json       ← Android/iOS wrapper (webDir: www)
 ```
 
 ---
 
-## Architecture & Pipeline
+## How It Works
 
-### Backend (`backend/app.py`)
+Everything below runs client-side. The browser never sends your image anywhere.
 
-```
-POST /process-image
-        │
-        ▼
-  ┌─────────────┐     ┌──────────────────┐     ┌──────────────────┐
-  │  EasyOCR    │────▶│  StyleExtractor  │────▶│   MaskBuilder    │
-  │  (detect)   │     │  (K-Means color) │     │  (dilated mask)  │
-  └─────────────┘     └──────────────────┘     └──────────────────┘
-        │                      │                        │
-        │                      ▼                        ▼
-        │              text_color hex            cv2.inpaint()
-        │              bg_color hex              (Telea algorithm)
-        │              font_size (px)                   │
-        │                                               │
-        └──────────────────────────────────────────────▼
-                                              JSON Response:
-                                              { image_b64, blocks[] }
-```
+| Stage | Engine | Notes |
+|-------|--------|-------|
+| **1. Import** | PDF.js / native decode | PDF page 1 rendered at ~300 DPI; JPG, PNG, WEBP, BMP, GIF decoded directly |
+| **2. OCR** | native `TextDetector` → Tesseract.js 4 | Line-level boxes + confidence. Images over 2000 px are downscaled for OCR, then coordinates scaled back |
+| **3. Font ID** | ONNX Runtime Web | 64×64 grayscale crop per block → font CNN. Only runs when the source didn't already name a font |
+| **4. Erase** | OpenCV.js `inpaint` (Telea) | Double-click a block to erase the original glyphs behind it |
+| **5. Edit** | `contenteditable` overlay | Absolutely positioned over the image, rescaled on resize/zoom |
+| **6. Export** | off-screen canvas | Flattened at native resolution, downloaded as PNG |
 
-**Stage 1 — OCR (EasyOCR)**
-- Loads EasyOCR with your chosen language(s) once; cached for subsequent calls
-- Returns corner points, text string, and confidence per detection
-- Minimum confidence filter removes low-quality matches
+### Offline guarantees
 
-**Stage 2 — Style Extraction (per bounding box)**
-- Crops the region from the image
-- Otsu threshold separates dark (text) pixels from light (background) pixels
-- K-Means (k=2) on text pixels → dominant text colour
-- K-Means (k=2) on background pixels → dominant background colour  
-- Font-size estimate: `bbox_height × 0.85` (cap-height heuristic)
+Every library is vendored under `www/vendor/` and loaded from disk first; the
+CDN fallbacks exist purely as a convenience for when a vendor file is absent.
+With the network fully blocked the app still boots all three engines, runs
+OCR, classifies fonts, inpaints and exports.
 
-**Stage 3 — Mask Generation**
-- Binary mask: 255 inside all text bboxes, 0 elsewhere
-- 8px elliptical dilation → covers antialiased glyph edges
-- Single combined mask = one inpainting pass (faster than per-region)
+The only external request is the Google Fonts stylesheet, which is decorative
+— every rule carries a system-font fallback, so blocking it changes nothing
+but the typeface of the UI chrome.
 
-**Stage 4 — Inpainting (`cv2.inpaint`)**
-- Algorithm: Telea (fast, artifact-free for text)  
-- Inpaint radius: 12px neighbourhood
-- Alternative: switch `INPAINT_METHOD = cv2.INPAINT_NS` for Navier-Stokes
-- For complex backgrounds, swap to LaMa: `pip install simple-lama-inpainting`
+### Keyboard shortcuts
 
-**Stage 5 — API Response**
+| Key | Action |
+|-----|--------|
+| `Ctrl+O` | Import |
+| `Ctrl+S` / `Ctrl+E` | Export PNG |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+| `Ctrl` `+` / `-` / `0` | Zoom in / out / fit |
+| `Esc` | Close modal, or deselect the current block |
+
+---
+
+## JSON Payload Format
+
+You can skip OCR entirely and import a payload directly (the "JSON" tab, or
+drop a `.json` file). This is also the shape the Python backend returns.
+
 ```json
 {
-  "image_b64": "data:image/png;base64,…",
+  "bg_image": "data:image/png;base64,…",
   "image_w": 1920,
   "image_h": 1080,
   "blocks": [
     {
-      "id": "uuid",
       "text": "Hello World",
       "x": 120, "y": 45, "w": 280, "h": 38,
       "color": "#2C2C2C",
-      "bg_color": "#F5F0E8",
+      "bg_color": "transparent",
       "size": 32,
+      "font_family": "Georgia",
       "confidence": 0.987
     }
   ]
 }
 ```
 
-### Frontend (`frontend/index.html`)
-
-**Overlay System**
-- Cleaned background rendered as `<img>` in a relative-positioned workspace
-- Each text block → `contenteditable` div, absolutely positioned over the image
-- Position is scaled from native image pixels to rendered display pixels
-- `scaleFactor = renderedWidth / nativeWidth` recalculated on window resize
-- Clicking a field selects all text for instant replacement
-
-**Export System**
-- Off-screen `<canvas>` at native image resolution (no scaling artifacts)
-- Draws inpainted background at 1:1 pixel ratio
-- Iterates all editable fields, reads `.textContent`, renders with `ctx.fillText`
-- Downloads as `pixelscribe-export.png`
+`font_family` is optional — omit it and the ONNX classifier predicts one.
+Supply it and it is treated as authoritative, skipping the classifier.
 
 ---
 
-## API Reference
+## Optional Python Backend
+
+The browser pipeline is self-sufficient. The Python backend exists for heavier
+server-side OCR (EasyOCR, 80+ languages, GPU) when you want it.
+
+```bash
+./Start --backend          # web app on :5173 + API on :8000
+```
+
+Then in the app: **OCR Server** (or **More → OCR Server** on mobile) → enter
+`http://localhost:8000`. The app uses it only as a fallback when in-browser
+OCR fails.
 
 ### `POST /process-image`
 
-| Field        | Type   | Default | Description                          |
-|-------------|--------|---------|--------------------------------------|
-| `file`       | File   | —       | Image file (JPEG/PNG/WEBP/BMP)       |
-| `languages`  | string | `"en"`  | Comma-separated EasyOCR language codes |
-| `confidence` | float  | `0.25`  | Min OCR confidence (0–1)             |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `file` | File | — | Image (JPEG/PNG/WEBP/BMP) |
+| `languages` | string | `"en"` | Comma-separated EasyOCR codes |
+| `confidence` | float | `0.25` | Minimum OCR confidence |
 
-**Supported language codes:** `en` `fr` `de` `es` `zh` `ja` `ko` `ar` `ru` (and [80+ more](https://www.jaided.ai/easyocr/))
+- `GET /health` → `{ "status": "ok", "ocr_loaded": [["en"]] }`
+- `GET /docs` → Swagger UI
 
-### `GET /health`
-```json
-{ "status": "ok", "ocr_loaded": [["en"]] }
-```
-
-### `GET /docs`
-Interactive Swagger UI (auto-generated by FastAPI)
-
----
-
-## Upgrading Inpainting Quality
-
-The default `cv2.inpaint` works well for simple backgrounds.
-For complex textures (photographs, gradients), upgrade to **LaMa**:
+### Full stack (Celery + Redis + nginx)
 
 ```bash
-pip install simple-lama-inpainting
+docker compose up --build
 ```
 
-Then in `app.py`, replace `inpaint_image()`:
+| Service | URL |
+|---------|-----|
+| App (nginx) | http://localhost:3000 |
+| API | http://localhost:8000 |
+| Flower | http://localhost:5555 |
 
-```python
-from simple_lama_inpainting import SimpleLama
-from PIL import Image
+---
 
-_lama = SimpleLama()
+## Mobile (Capacitor)
 
-def inpaint_image(image_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    pil_img  = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
-    pil_mask = Image.fromarray(mask)
-    result   = _lama(pil_img, pil_mask)
-    return cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
+`capacitor.config.json` already points `webDir` at `www`, so the same offline
+build ships to Android:
+
+```bash
+npm install
+npx cap add android
+npm run sync
+npm run android
 ```
 
 ---
 
-## Performance Tips
+## Retraining the Font Classifier
 
-| Image size   | EasyOCR  | Inpaint | Total (CPU) |
-|-------------|---------|---------|-------------|
-| 800×600     | ~2s     | <0.5s   | ~3s         |
-| 1920×1080   | ~5s     | ~1s     | ~6s         |
-| 4K          | ~12s    | ~3s     | ~15s        |
+```bash
+python backend/train_font_classifier.py
+```
 
-- **GPU:** Set `gpu=True` in `get_reader()` and `TextDetector` for 5–10× OCR speedup (needs CUDA)
-- **First run:** EasyOCR downloads models (~200 MB) on first language load
-- **Caching:** Reader is singleton-cached; subsequent calls with the same language are instant
+Writes to `www/models/font_classifier.onnx` — the same file the browser loads,
+so there is only ever one copy to keep in sync.
+
+The shipped checkpoint has **5 classes** (Arial, Times New Roman, Courier New,
+Calibri, Georgia). `FONT_LABELS` in `www/main.js` lists ten names; the code
+reads the real class count off the model and uses only as many labels as the
+model actually emits, and `npm run check` reports the mismatch. If you retrain
+with more classes, extend `FONT_LABELS` to match the training script's list,
+in the same order.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| Badges stuck on "loading" | Opened as `file://`. Use `npm start`. |
+| "ONNX unavailable" | Loader/wasm version mismatch. Run `npm run check`. |
+| "OCR unavailable" offline | Incomplete `www/vendor/tesseract/`, or missing `www/tessdata/eng.traineddata`. Run `npm run check`. |
+| OCR finds nothing | Low contrast or very small text. The image is downscaled to 2000 px for OCR — try cropping tighter. |
+| Export differs from preview | Both use the same geometry; if they diverge, the block's font isn't installed locally and the canvas fell back to another face. |
+| Port 5173 in use | `node server.js --port 5174` |
 
 ---
 
 ## Requirements
 
-- Python 3.10+
-- ~500 MB disk (EasyOCR models, ~200 MB each language on first run)
-- RAM: ~1 GB for English model; ~2 GB for CJK
+- **Web app:** Node 18+ (to serve files) and any modern browser. ~50 MB of vendored WASM.
+- **Optional backend:** Python 3.10+, ~500 MB disk (EasyOCR downloads ~200 MB per language on first use).
 
 ---
 

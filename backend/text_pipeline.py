@@ -117,11 +117,14 @@ class FontClassifier:
         # ── Resolve model path ──
         model_file = self.model_path
         if not model_file:
+            _repo_root = Path(__file__).resolve().parent.parent
             candidates = [
-                "models/font_classifier.onnx",
-                "./font_classifier.onnx",
+                # Canonical location: the same copy the browser app loads.
+                str(_repo_root / "www" / "models" / "font_classifier.onnx"),
+                str(_repo_root / "models" / "font_classifier.onnx"),
                 "/app/models/font_classifier.onnx",  # Docker path
-                str(Path(__file__).parent.parent / "models" / "font_classifier.onnx"),
+                "models/font_classifier.onnx",       # CWD-relative
+                "./font_classifier.onnx",
             ]
             for cand in candidates:
                 if Path(cand).exists():

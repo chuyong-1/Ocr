@@ -223,7 +223,9 @@ _WORD_POOL = (
 ).split()
 
 # ── Output directory ──────────────────────────────────────────────────────────
-MODELS_DIR = Path(__file__).parent.parent / "models"
+# Train straight into www/models/ — the copy the browser app loads. Keeping
+# one canonical file avoids the stale-model-in-two-places problem.
+MODELS_DIR = Path(__file__).parent.parent / "www" / "models"
 
 
 # ════════════════════════════════════════════════════════════════════════════

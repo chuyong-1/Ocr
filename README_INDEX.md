@@ -1,4 +1,20 @@
 # 🎯 PIXELSCRIBE v3.0 — 10-CLASS FONT CLASSIFIER INTEGRATION
+
+> **Note — paths and scope have changed since this document was written.**
+>
+> * The ONNX model lives at **`www/models/font_classifier.onnx`** (one canonical
+>   copy, loaded by both the browser app and the Python backend). References
+>   below to `backend/models/…` or a bare `models/…` are historical.
+> * The shipped checkpoint has **5 classes** (Arial, Times New Roman, Courier
+>   New, Calibri, Georgia), not 10. Both `www/main.js` and
+>   `backend/text_pipeline.py` read the real class count off the model and
+>   bound-check the argmax, so a shorter model degrades safely.
+> * The browser app in `www/` is the primary product and needs no Python.
+>   See [readme.md](readme.md) for how to run it; `npm run check` validates
+>   the vendored assets.
+
+---
+
 ## Complete Package Index & Getting Started Guide
 
 ---

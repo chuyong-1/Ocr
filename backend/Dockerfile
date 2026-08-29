@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code
 COPY backend/ ./backend/
-COPY models/  ./models/
+COPY www/models/ ./models/
 
 # Runtime directories (volumes will overlay these in compose)
 RUN mkdir -p data/uploads data/results

@@ -44,6 +44,7 @@ import gc
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
@@ -54,6 +55,23 @@ from PIL import Image, ImageDraw, ImageFont
 from typing_extensions import TypedDict
 
 log = logging.getLogger("textclear.langgraph")
+
+
+# ─────────────────────────────────────────────────────────────────
+# MODEL LOCATIONS
+# ─────────────────────────────────────────────────────────────────
+# The ONNX models live in www/models/ so the browser build can fetch them
+# directly; that is the single canonical copy. Resolving against this file
+# (rather than a bare relative path) means the pipeline works no matter what
+# directory the worker or uvicorn was started from. In the container the
+# Dockerfile copies www/models/ to /app/models/, which this also finds.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+MODELS_DIR = next(
+    (d for d in (_REPO_ROOT / "www" / "models", _REPO_ROOT / "models") if d.is_dir()),
+    _REPO_ROOT / "www" / "models",
+)
+DEFAULT_LAMA_PATH = str(MODELS_DIR / "lama.onnx")
+DEFAULT_FONT_PATH = str(MODELS_DIR / "font_classifier.onnx")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -199,8 +217,8 @@ class ONNXSessionManager:
 
     def __init__(
         self,
-        lama_path:  str = "models/lama.onnx",
-        font_path:  str = "models/font_classifier.onnx",
+        lama_path:  str = DEFAULT_LAMA_PATH,
+        font_path:  str = DEFAULT_FONT_PATH,
         font_labels: Optional[List[str]] = None,
         providers:  Optional[List[str]] = None,
     ) -> None:
@@ -260,8 +278,8 @@ class ONNXSessionManager:
 
 
 def init_session_manager(
-    lama_path:   str = "models/lama.onnx",
-    font_path:   str = "models/font_classifier.onnx",
+    lama_path:   str = DEFAULT_LAMA_PATH,
+    font_path:   str = DEFAULT_FONT_PATH,
     font_labels: Optional[List[str]] = None,
     providers:   Optional[List[str]] = None,
 ) -> ONNXSessionManager:

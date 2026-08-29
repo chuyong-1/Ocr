@@ -33,10 +33,38 @@
 /* ══════════════════════════════════════════════════════════════════════
    ONNX / PDF / vendor path constants
 ══════════════════════════════════════════════════════════════════════ */
-const ONNX_WASM_LOCAL = './vendor/onnx/';
-const ONNX_WASM_CDN   = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
-const PDF_WORKER_LOCAL = './vendor/pdfjs/pdf.worker.min.js';
-const PDF_WORKER_CDN   = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+/* ONNX Runtime Web is pinned to 1.26.0 — the version of the vendored
+   ort.wasm.min.js AND of ort-wasm-simd-threaded.wasm. These must agree:
+   the loader fetches a wasm artifact whose name encodes the build, so a
+   mismatched pair 404s at session-create time. */
+const ONNX_VERSION     = '1.26.0';
+const ONNX_WASM_LOCAL  = './vendor/onnx/';
+const ONNX_WASM_CDN    = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ONNX_VERSION}/dist/`;
+// The artifact the 1.26 wasm-only build actually requests. Probing for this
+// (rather than the long-gone `ort-wasm.wasm`) is what makes the local-vs-CDN
+// decision correct.
+const ONNX_WASM_PROBE  = 'ort-wasm-simd-threaded.mjs';
+
+const PDF_VENDOR_LOCAL = './vendor/pdfjs/';
+const PDF_VENDOR_CDN   = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
+const PDF_WORKER_FILE  = 'pdf.worker.min.js';
+
+// Neighbourhood radius for cv.inpaint — mirrors backend/app.py's INPAINT_RADIUS.
+const INPAINT_RADIUS = 12;
+
+/* Text geometry — shared by the on-screen overlay and the export canvas so
+   the PNG matches the preview exactly.
+
+   OCR reports a tight *ink* box. CSS positions the *em* box, and with a
+   line-height above 1 the em box is pushed down inside the line box by half
+   the leading. Subtracting that half-leading from `top` puts the first line's
+   em box where the ink box starts, which is also where canvas `textBaseline
+   = 'top'` draws. Without this the overlay sits a few px low on screen and
+   the export lands somewhere else again. */
+const TEXT_LINE_HEIGHT = 1.25;
+// Hard line breaks the user typed with Enter: CRLF or LF.
+const NEWLINE_RE = /\r?\n/;
+const halfLeading = (fontSizePx) => (TEXT_LINE_HEIGHT - 1) * fontSizePx / 2;
 
 const FONT_CLASSIFIER_MODEL_URL = './models/font_classifier.onnx';
 const API_BASE_STORAGE_KEY      = 'pixelscribe_api_base';
@@ -45,12 +73,23 @@ const API_BASE_STORAGE_KEY      = 'pixelscribe_api_base';
 const OFFLINE_OCR_LANG = 'eng';
 const OFFLINE_OCR_MAX_DIM = 2000;
 
-// Local vendor paths (used if present — works fully offline)
-const OFFLINE_OCR_TESSERACT_LOCAL = './vendor/tesseract/tesseract.min.js';
+// Local vendor paths (used if present — works fully offline).
+// Tesseract.js does NOT resolve these against the document; it hands them
+// straight to a Worker whose own base URL is ./vendor/tesseract/. Relative
+// paths would therefore resolve twice. absUrl() below makes them absolute.
+const OFFLINE_OCR_VENDOR_LOCAL    = './vendor/tesseract/';
+const OFFLINE_OCR_TESSERACT_LOCAL = OFFLINE_OCR_VENDOR_LOCAL + 'tesseract.min.js';
+const OFFLINE_OCR_WORKER_LOCAL    = OFFLINE_OCR_VENDOR_LOCAL + 'worker.min.js';
+const OFFLINE_OCR_CORE_LOCAL      = OFFLINE_OCR_VENDOR_LOCAL + 'tesseract-core.wasm.js';
+const OFFLINE_OCR_TESSDATA_LOCAL  = './tessdata/';
 
 // CDN fallbacks — loaded automatically when local files are absent
 const OFFLINE_OCR_TESSERACT_CDN = 'https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js';
 const OFFLINE_OCR_TESSDATA_CDN  = 'https://tessdata.projectnaptha.com/4.0.0/';
+
+/** Absolute URL for a path relative to the page — required for anything
+ *  handed to a Worker, which resolves relative URLs against its own script. */
+function absUrl(path) { return new URL(path, document.baseURI).href; }
 
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -130,14 +169,21 @@ async function _resolveLocalOrCdnBase(localBase, cdnBase, probeFile) {
 
 async function _setOnnxWasmPaths() {
   if (typeof ort === 'undefined' || !ort.env || !ort.env.wasm) return;
-  const base = await _resolveLocalOrCdnBase(ONNX_WASM_LOCAL, ONNX_WASM_CDN, 'ort-wasm.wasm');
-  ort.env.wasm.wasmPaths = base;
+  const base = await _resolveLocalOrCdnBase(ONNX_WASM_LOCAL, ONNX_WASM_CDN, ONNX_WASM_PROBE);
+  ort.env.wasm.wasmPaths = absUrl(base);
+  // Multi-threading needs SharedArrayBuffer, which needs cross-origin
+  // isolation (COOP+COEP). A plain static host — and Capacitor's WebView —
+  // has neither, and the threaded build then aborts instead of degrading.
+  // One thread is ample for 64x64 crops.
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.proxy      = false;
+  console.info('[EdgeML] ONNX wasm base:', ort.env.wasm.wasmPaths);
 }
 
 async function _ensurePdfWorkerSrc() {
   if (typeof pdfjsLib === 'undefined') return;
-  const base = await _resolveLocalOrCdnBase('./vendor/pdfjs/', 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/', 'pdf.worker.min.js');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.js';
+  const base = await _resolveLocalOrCdnBase(PDF_VENDOR_LOCAL, PDF_VENDOR_CDN, PDF_WORKER_FILE);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = absUrl(base + PDF_WORKER_FILE);
 }
 
 function _setImportEnabled(enabled) {
@@ -173,11 +219,18 @@ function _refreshUiLock() {
 }
 
 function onOpenCvLoad() {
+  window.__cvLoaded = true;
   if (typeof cv !== 'undefined') {
     if (cv.getBuildInformation) _markCvReady();
     else cv.onRuntimeInitialized = _markCvReady;
   }
 }
+
+/* index.html declares a stub onOpenCvLoad in <head> so the async opencv.js
+   tag always has a handler, even if it wins the race against this file.
+   Adopt whatever it recorded, then take over. */
+window.__onCvReady = onOpenCvLoad;
+if (window.__cvLoaded) onOpenCvLoad();
 
 function _markCvReady() {
   if (cvReady) return;
@@ -192,12 +245,19 @@ function _markCvReady() {
    EDGE ML — ONNX Runtime Web font classifier
 ══════════════════════════════════════════════════════════════════════ */
 const EdgeML = (() => {
+  /* Label order must match backend/train_font_classifier.py's FONT_LABELS.
+     The checkpoint currently shipped in models/font_classifier.onnx was
+     trained on the first five classes only — its output tensor is [N, 5].
+     `_labelCount` is read back from the model at load time so a retrained
+     model with more classes starts using them without a code change, and a
+     shorter one can never index past the end of this array. */
   const FONT_LABELS = [
     'Arial', 'Times New Roman', 'Courier New', 'Calibri', 'Georgia',
     'Verdana', 'Roboto', 'Helvetica', 'Garamond', 'Consolas',
   ];
 
   let _session = null;
+  let _labelCount = FONT_LABELS.length;
   const _cropCanvas = document.createElement('canvas');
   _cropCanvas.width = _cropCanvas.height = 64;
   const _cropCtx = _cropCanvas.getContext('2d', { willReadFrequently: true });
@@ -242,16 +302,22 @@ const EdgeML = (() => {
       const outputName = _session.outputNames[0];
       const results    = await _session.run({ [inputName]: tensor });
       const logits     = results[outputName].data;
+      const n = Math.min(logits.length, FONT_LABELS.length);
+      if (logits.length > FONT_LABELS.length) {
+        console.warn(`[EdgeML] Model emits ${logits.length} classes but only ` +
+                     `${FONT_LABELS.length} labels are known — extra classes ignored.`);
+      }
+      _labelCount = n;
       let maxIdx = 0, maxVal = logits[0];
-      for (let i = 1; i < logits.length; i++) { if (logits[i] > maxVal) { maxVal = logits[i]; maxIdx = i; } }
-      return (maxIdx >= 0 && maxIdx < FONT_LABELS.length) ? FONT_LABELS[maxIdx] : 'Arial';
+      for (let i = 1; i < n; i++) { if (logits[i] > maxVal) { maxVal = logits[i]; maxIdx = i; } }
+      return FONT_LABELS[maxIdx] || 'Arial';
     } catch (err) {
       console.warn('[EdgeML] predictFont error:', err.message);
       return 'Arial';
     }
   }
 
-  return { init, predictFont, FONT_LABELS };
+  return { init, predictFont, FONT_LABELS, labelCount: () => _labelCount };
 })();
 
 
@@ -279,29 +345,117 @@ function resolveFontStack(fontFamily) {
    IMAGE PROCESSOR — OpenCV.js Inpainting
 ══════════════════════════════════════════════════════════════════════ */
 const ImageProcessor = (() => {
+  /** Point an <img> at new pixels without re-triggering the payload-load
+   *  handler that loadPayload() installed on it. */
+  function _replaceImageSrcQuietly(imageElement, src) {
+    return new Promise((resolve, reject) => {
+      const prevOnLoad  = imageElement.onload;
+      const prevOnError = imageElement.onerror;
+      imageElement.onload = () => {
+        imageElement.onload = prevOnLoad; imageElement.onerror = prevOnError;
+        ScaleEngine.recompute();
+        resolve();
+      };
+      imageElement.onerror = () => {
+        imageElement.onload = prevOnLoad; imageElement.onerror = prevOnError;
+        reject(new Error('Inpainted image failed to load.'));
+      };
+      imageElement.src = src;
+    });
+  }
+
+  /** OpenCV.js throws a raw C++ exception pointer (a number) rather than an
+   *  Error. Turn it into something a Toast can actually show. */
+  function _cvError(e) {
+    if (e instanceof Error) return e;
+    if (typeof e === 'number' && typeof cv !== 'undefined' && cv.exceptionFromPtr) {
+      try { return new Error('OpenCV: ' + cv.exceptionFromPtr(e).msg); } catch (_) { /* fall through */ }
+    }
+    return new Error('OpenCV error (' + e + ')');
+  }
+
   async function inpaintRegion(imageElement, bbox) {
     if (!cvReady || typeof cv === 'undefined') throw new Error('OpenCV.js not loaded yet.');
-    let src, mask, dst;
+    let src, rgb, mask, dst;
     try {
-      src  = cv.imread(imageElement);
-      mask = new cv.Mat(src.rows, src.cols, cv.CV_8UC1, new cv.Scalar(0));
-      const x1 = Math.max(0, bbox.x - 4), y1 = Math.max(0, bbox.y - 4);
-      const x2 = Math.min(src.cols, bbox.x + bbox.width + 4);
-      const y2 = Math.min(src.rows, bbox.y + bbox.height + 4);
+      src = cv.imread(imageElement);              // always CV_8UC4 (RGBA)
+
+      // cv.inpaint accepts 1- or 3-channel 8-bit input only; handing it the
+      // RGBA Mat that imread() returns throws an unsupported-format exception.
+      rgb = new cv.Mat();
+      cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+
+      mask = new cv.Mat(rgb.rows, rgb.cols, cv.CV_8UC1, new cv.Scalar(0));
+      const x1 = Math.max(0, Math.round(bbox.x) - 4);
+      const y1 = Math.max(0, Math.round(bbox.y) - 4);
+      const x2 = Math.min(rgb.cols, Math.round(bbox.x + bbox.width) + 4);
+      const y2 = Math.min(rgb.rows, Math.round(bbox.y + bbox.height) + 4);
+      if (x2 <= x1 || y2 <= y1) throw new Error('Region is outside the image.');
       cv.rectangle(mask, new cv.Point(x1, y1), new cv.Point(x2, y2), new cv.Scalar(255), -1, cv.LINE_8, 0);
+
       dst = new cv.Mat();
-      cv.inpaint(src, mask, dst, 3, cv.INPAINT_TELEA);
+      cv.inpaint(rgb, mask, dst, INPAINT_RADIUS, cv.INPAINT_TELEA);
+
       const hiddenCanvas = document.createElement('canvas');
-      cv.imshow(hiddenCanvas, dst);
+      cv.imshow(hiddenCanvas, dst);               // handles CV_8UC3 → RGBA
       AppState.bgSrc = hiddenCanvas.toDataURL('image/png');
-      imageElement.src = AppState.bgSrc;
+      // Swapping .src re-fires whatever onload loadPayload() left attached,
+      // which would rebuild every overlay block from the original payload and
+      // silently throw away the user's edits. Detach for this one swap.
+      await _replaceImageSrcQuietly(imageElement, AppState.bgSrc);
+    } catch (e) {
+      throw _cvError(e);
     } finally {
       if (src)  src.delete();
+      if (rgb)  rgb.delete();
       if (mask) mask.delete();
       if (dst)  dst.delete();
     }
   }
-  return { inpaintRegion };
+  /** Erase every given region in one inpaint pass (all rectangles painted
+   *  onto a single mask), instead of one full read/inpaint/encode cycle per
+   *  block — which is what made auto-cleaning a busy document (dozens of
+   *  OCR'd lines) far too slow to run on every upload. Returns a data URL,
+   *  or null if OpenCV isn't ready / there's nothing to erase. */
+  async function inpaintRegions(imageElement, bboxList) {
+    if (!cvReady || typeof cv === 'undefined' || !bboxList || !bboxList.length) return null;
+    let src, rgb, mask, dst;
+    try {
+      src = cv.imread(imageElement);
+      rgb = new cv.Mat();
+      cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+
+      mask = new cv.Mat(rgb.rows, rgb.cols, cv.CV_8UC1, new cv.Scalar(0));
+      let any = false;
+      bboxList.forEach((bbox) => {
+        const x1 = Math.max(0, Math.round(bbox.x) - 4);
+        const y1 = Math.max(0, Math.round(bbox.y) - 4);
+        const x2 = Math.min(rgb.cols, Math.round(bbox.x + bbox.width) + 4);
+        const y2 = Math.min(rgb.rows, Math.round(bbox.y + bbox.height) + 4);
+        if (x2 <= x1 || y2 <= y1) return;
+        cv.rectangle(mask, new cv.Point(x1, y1), new cv.Point(x2, y2), new cv.Scalar(255), -1, cv.LINE_8, 0);
+        any = true;
+      });
+      if (!any) return null;
+
+      dst = new cv.Mat();
+      cv.inpaint(rgb, mask, dst, INPAINT_RADIUS, cv.INPAINT_TELEA);
+
+      const hiddenCanvas = document.createElement('canvas');
+      cv.imshow(hiddenCanvas, dst);
+      return hiddenCanvas.toDataURL('image/png');
+    } catch (e) {
+      console.warn('[ImageProcessor] Batch inpaint failed:', _cvError(e).message);
+      return null;
+    } finally {
+      if (src)  src.delete();
+      if (rgb)  rgb.delete();
+      if (mask) mask.delete();
+      if (dst)  dst.delete();
+    }
+  }
+
+  return { inpaintRegion, inpaintRegions };
 })();
 
 
@@ -330,6 +484,27 @@ const OfflineOCR = (() => {
   function isReady()   { return _engine !== 'none'; }
   function lastError() { return _lastError; }
 
+  /** All three local assets must be present; a partial vendor dir is worse
+   *  than none, because Tesseract would half-load and then stall. */
+  async function _haveLocalTessAssets() {
+    const probes = [
+      OFFLINE_OCR_WORKER_LOCAL,
+      OFFLINE_OCR_CORE_LOCAL,
+      OFFLINE_OCR_TESSDATA_LOCAL + OFFLINE_OCR_LANG + '.traineddata',
+    ];
+    try {
+      const results = await Promise.all(
+        probes.map((u) => fetch(u, { method: 'HEAD' }).then((r) => r.ok).catch(() => false))
+      );
+      const ok = results.every(Boolean);
+      if (!ok) {
+        console.info('[OCR] Local Tesseract assets incomplete:',
+          probes.filter((_, i) => !results[i]).join(', '));
+      }
+      return ok;
+    } catch (_) { return false; }
+  }
+
   /* ─── core initialisation ─────────────────────────────────────── */
   async function _initInternal() {
     _lastError = null;
@@ -346,9 +521,9 @@ const OfflineOCR = (() => {
 
     /* ② Tesseract.js ─ local vendor → CDN fallback ──────────────── */
     try {
+      let loadedLocally = (typeof Tesseract !== 'undefined');
       if (typeof Tesseract === 'undefined') {
         // Try local first (works fully offline)
-        let loadedLocally = false;
         try {
           await _loadScript(OFFLINE_OCR_TESSERACT_LOCAL);
           loadedLocally = (typeof Tesseract !== 'undefined');
@@ -376,22 +551,47 @@ const OfflineOCR = (() => {
         }
       };
 
+      /* Point the worker at whichever asset set actually exists.
+         Tesseract.js defaults every one of these to a CDN, so without this
+         block the app downloads ~25 MB on each cold start and fails outright
+         with no network — which defeats the entire point of the vendor dir. */
+      const opts = { logger: logFn };
+      if (loadedLocally && await _haveLocalTessAssets()) {
+        opts.workerPath = absUrl(OFFLINE_OCR_WORKER_LOCAL);
+        opts.corePath   = absUrl(OFFLINE_OCR_CORE_LOCAL);
+        opts.langPath   = absUrl(OFFLINE_OCR_TESSDATA_LOCAL);
+        // The vendored eng.traineddata is uncompressed; the default `true`
+        // would request eng.traineddata.gz and 404.
+        opts.gzip       = false;
+        opts.cacheMethod = 'none';   // no IndexedDB round-trip for a local file
+        console.info('[OCR] Using fully local Tesseract assets.');
+      } else {
+        opts.langPath = OFFLINE_OCR_TESSDATA_CDN;
+        console.info('[OCR] Falling back to Tesseract CDN assets.');
+      }
+
       /* Try Tesseract.js v4 API first (createWorker(lang, oem, opts))
          which auto-loads the language data. If that fails (v2/v3 build),
          fall back to the explicit loadLanguage / initialize sequence. */
       try {
-        _worker = await Tesseract.createWorker(OFFLINE_OCR_LANG, 1, {
-          logger:     logFn,
-          langPath:   OFFLINE_OCR_TESSDATA_CDN,   // tessdata from CDN; ignored in v4 online
-        });
+        _worker = await Tesseract.createWorker(OFFLINE_OCR_LANG, 1, opts);
         console.info('[OCR] Tesseract.js v4 worker ready.');
       } catch (_v4Err) {
         console.warn('[OCR] v4 API failed, trying v2/v3 API…', _v4Err.message);
-        _worker = await Tesseract.createWorker({ logger: logFn });
+        _worker = await Tesseract.createWorker(opts);
         await _worker.loadLanguage(OFFLINE_OCR_LANG);
         await _worker.initialize(OFFLINE_OCR_LANG);
         console.info('[OCR] Tesseract.js v2/v3 worker ready.');
       }
+
+      // Default PSM (AUTO) tries to reconstruct paragraph/column reading
+      // order, which merges unrelated text across columns on forms and
+      // invoices (a billing-address column and a shipping-address column
+      // at the same height become one garbled "line"). SPARSE_TEXT finds
+      // each line on its own instead, which is also what this app wants —
+      // one OCR block per editable line, regardless of page layout.
+      try { await _worker.setParameters({ tessedit_pageseg_mode: '11' }); }
+      catch (psmErr) { console.warn('[OCR] Could not set sparse-text PSM:', psmErr.message); }
 
       _engine = 'tesseract';
     } catch (err) {
@@ -582,14 +782,15 @@ const OverlayEngine = (() => {
     el.spellcheck      = false;
     el.textContent     = live.currentText;
 
+    const fs = Math.round(live.size * s);
     el.style.left       = `${Math.round(live.x * s)}px`;
-    el.style.top        = `${Math.round(live.y * s)}px`;
+    el.style.top        = `${Math.round(live.y * s - halfLeading(fs))}px`;
     el.style.width      = `${Math.round(live.w * s)}px`;
     el.style.minHeight  = `${Math.round(live.h * s)}px`;
-    el.style.fontSize   = `${Math.round(live.size * s)}px`;
+    el.style.fontSize   = `${fs}px`;
     el.style.color      = live.color || '#1A1A1A';
     el.style.fontFamily = resolveFontStack(live.font_family);
-    el.style.lineHeight = '1.25';
+    el.style.lineHeight = String(TEXT_LINE_HEIGHT);
     if (live.bg_color) el.style.backgroundColor = _hexWithAlpha(live.bg_color, 0.0);
 
     let _textOnFocus = '';
@@ -634,11 +835,12 @@ const OverlayEngine = (() => {
     const s = AppState.scaleFactor;
     AppState.liveBlocks.forEach(live => {
       if (!live.el) return;
+      const fs = Math.round(live.size * s);
       live.el.style.left      = `${Math.round(live.x * s)}px`;
-      live.el.style.top       = `${Math.round(live.y * s)}px`;
+      live.el.style.top       = `${Math.round(live.y * s - halfLeading(fs))}px`;
       live.el.style.width     = `${Math.round(live.w * s)}px`;
       live.el.style.minHeight = `${Math.round(live.h * s)}px`;
-      live.el.style.fontSize  = `${Math.round(live.size * s)}px`;
+      live.el.style.fontSize  = `${fs}px`;
     });
   }
 
@@ -647,7 +849,12 @@ const OverlayEngine = (() => {
     if (!live || !live.el) return;
     const s = AppState.scaleFactor;
     if (font_family !== undefined) { live.font_family = font_family; live.el.style.fontFamily = resolveFontStack(font_family); }
-    if (size !== undefined)        { live.size = size; live.el.style.fontSize = `${Math.round(size * s)}px`; }
+    if (size !== undefined) {
+      live.size = size;
+      const fs = Math.round(size * s);
+      live.el.style.fontSize = `${fs}px`;
+      live.el.style.top      = `${Math.round(live.y * s - halfLeading(fs))}px`;   // keep the baseline anchored
+    }
     if (color !== undefined) {
       live.color = color; live.el.style.color = color;
       const swatch = document.getElementById(`lyr-swatch-${blockId}`);
@@ -797,11 +1004,13 @@ const ExportEngine = (() => {
       ctx.drawImage(bgImg, 0, 0, AppState.imageW, AppState.imageH);
       _showProgress(50);
       AppState.liveBlocks.forEach(live => {
-        const text = live.el ? live.el.textContent : live.currentText;
+        const text = live.el ? live.el.innerText : live.currentText;
         if (live.bg_color && live.bg_color !== 'transparent') { ctx.fillStyle = live.bg_color; ctx.fillRect(live.x, live.y, live.w, live.h); }
         ctx.font = `${live.size}px ${resolveFontStack(live.font_family || 'Arial')}`;
         ctx.fillStyle = live.color || '#000000'; ctx.textBaseline = 'top';
-        _drawWrappedText(ctx, text, live.x + 2, live.y + 2, live.w - 4, live.size * 1.25);
+        // textBaseline 'top' = top of the em box, which is exactly where the
+        // overlay's half-leading offset puts the first line on screen.
+        _drawWrappedText(ctx, text, live.x, live.y, live.w, live.size * TEXT_LINE_HEIGHT);
       });
       _showProgress(90);
       setTimeout(() => {
@@ -820,14 +1029,22 @@ const ExportEngine = (() => {
     bgImg.onerror = () => { Toast.show('Could not load background image', 'error'); _showProgress(0); };
     bgImg.src = AppState.bgSrc;
   }
+  /** Wraps on width and honours hard breaks the user typed with Enter.
+   *  Returns the y just past the last line drawn. */
   function _drawWrappedText(ctx, text, x, y, maxWidth, lineHeight) {
-    const words = text.split(' '); let line = '';
-    for (let i = 0; i < words.length; i++) {
-      const testLine = line + words[i] + ' ';
-      if (ctx.measureText(testLine).width > maxWidth && i > 0) { ctx.fillText(line.trim(), x, y); line = words[i] + ' '; y += lineHeight; }
-      else line = testLine;
+    for (const paragraph of String(text).split(NEWLINE_RE)) {
+      const words = paragraph.split(' ');
+      let line = '';
+      for (let i = 0; i < words.length; i++) {
+        const testLine = line + words[i] + ' ';
+        if (ctx.measureText(testLine).width > maxWidth && i > 0) {
+          ctx.fillText(line.trim(), x, y); line = words[i] + ' '; y += lineHeight;
+        } else line = testLine;
+      }
+      ctx.fillText(line.trim(), x, y);
+      y += lineHeight;
     }
-    ctx.fillText(line.trim(), x, y);
+    return y;
   }
   return { download };
 })();
@@ -941,9 +1158,41 @@ function _loadImageElement(src) {
   });
 }
 
+/** Fraction of the smaller box's area that two boxes share. */
+function _overlapRatio(a, b) {
+  const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  const inter = ix * iy;
+  if (inter <= 0) return 0;
+  return inter / Math.min(a.w * a.h, b.w * b.h);
+}
+
+/** Greedy non-max suppression over OCR line boxes. On multi-column layouts
+ *  (forms, invoices) OCR sometimes reports two overlapping boxes for text
+ *  that's really one line, or a stray box nested inside a bigger one — left
+ *  alone, both render as separate editable overlays stacked on the same
+ *  spot, which is what made a busy document look "puzzled"/doubled even
+ *  after each block's own region was correctly erased. Keep the
+ *  higher-confidence box of any pair that overlaps more than 35%. */
+function _suppressOverlappingBlocks(blocks, threshold = 0.35) {
+  const sorted = [...blocks].sort((a, b) => (b.confidence - a.confidence) || (b.w * b.h - a.w * a.h));
+  const kept = [];
+  for (const b of sorted) {
+    if (!kept.some((k) => _overlapRatio(b, k) > threshold)) kept.push(b);
+  }
+  return kept.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+}
+
 function _finalizeOcrBlocks(blocks, imageW, imageH) {
   const result = (blocks || []).map(b => {
-    const w = Math.max(2, Math.round(b.w || 0));
+    // OCR reports the tight ink width of the recognized glyphs. The overlay
+    // renders that same text with the browser's own font metrics (often a
+    // substituted font, always with box padding on top) — a box sized to
+    // exactly match wraps onto a second line and collides with whatever
+    // block sits below it. Pad width so single-line text has room to stay
+    // on one line.
+    const rawW = Math.max(2, Math.round(b.w || 0));
+    const w = Math.max(2, Math.min(imageW, Math.round(rawW * 1.15) + 12));
     const h = Math.max(2, Math.round(b.h || 0));
     const x = Math.max(0, Math.min(Math.round(b.x || 0), imageW - w));
     const y = Math.max(0, Math.min(Math.round(b.y || 0), imageH - h));
@@ -952,11 +1201,15 @@ function _finalizeOcrBlocks(blocks, imageW, imageH) {
       color: b.color || '#1A1A1A', bg_color: b.bg_color || 'transparent',
       size: b.size || Math.max(12, Math.round(h * 0.85)),
       confidence: typeof b.confidence === 'number' ? b.confidence : 0.5,
-      font_family: b.font_family || 'Arial',
+      // Deliberately left undefined when the OCR engine did not report one:
+      // defaulting to 'Arial' here would satisfy the "already known" test in
+      // _enrichBlocksWithFonts and the ONNX classifier would never run.
+      // OverlayEngine falls back to Arial at render time if it stays unset.
+      ...(b.font_family ? { font_family: b.font_family } : {}),
     };
   }).filter(b => b.text.length > 0);
 
-  if (result.length) return result;
+  if (result.length) return _suppressOverlappingBlocks(result);
 
   // Absolute fallback: one editable placeholder so the image is still usable
   const fallbackW = Math.max(120, Math.round(imageW * 0.7));
@@ -965,7 +1218,7 @@ function _finalizeOcrBlocks(blocks, imageW, imageH) {
     text: 'Edit text', x: Math.round((imageW - fallbackW) / 2), y: Math.round(imageH * 0.1),
     w: fallbackW, h: fallbackH, color: '#1A1A1A', bg_color: 'transparent',
     size: Math.max(14, Math.round(fallbackH * 0.7)), confidence: 0, font_family: 'Arial',
-  }];
+  }];   // placeholder text has no source glyphs to classify — Arial is right here
 }
 
 async function _processImageWithOfflineOcr(src, naturalW, naturalH) {
@@ -977,10 +1230,24 @@ async function _processImageWithOfflineOcr(src, naturalW, naturalH) {
   _setStatusBusy(`Running OCR (${OfflineOCR.engine() || 'loading'})…`);
   const ocr    = await OfflineOCR.recognize(imgEl);
   const blocks = _finalizeOcrBlocks(ocr.blocks, imageW, imageH);
+  _showProgress(60);
+
+  // Erase the original pixels under each detected line so the editable
+  // overlay isn't rendered on top of the still-visible source text — without
+  // this every upload looked like double-exposed/"puzzled" text until each
+  // block was manually double-clicked to erase it one at a time.
+  let bgImage = src;
+  if (blocks.length) {
+    _setStatusBusy('Cleaning detected text…');
+    const cleaned = await ImageProcessor.inpaintRegions(
+      imgEl, blocks.map(b => ({ x: b.x, y: b.y, width: b.w, height: b.h }))
+    );
+    if (cleaned) bgImage = cleaned;
+  }
   _showProgress(70);
 
   return {
-    bg_image:   src, image_w: imageW, image_h: imageH, blocks,
+    bg_image:   bgImage, image_w: imageW, image_h: imageH, blocks,
     ocr_text:   ocr.plainText || blocks.map(b => b.text).join('\n'),
     ocr_engine: ocr.engine,
   };
@@ -1029,7 +1296,7 @@ async function _processImageWithBackend(blob, filename) {
     text: b.text, x: b.x, y: b.y, w: b.w, h: b.h,
     color: b.color || '#000000', bg_color: b.bg_color,
     size: b.size || Math.max(12, b.h || 16), confidence: b.confidence,
-    font_family: b.font_family || 'Arial',
+    ...(b.font_family ? { font_family: b.font_family } : {}),   // see _finalizeOcrBlocks
   }));
   return { bg_image: data.image_b64, image_w: data.image_w, image_h: data.image_h, blocks,
            ocr_text: blocks.map(b => b.text).filter(Boolean).join('\n'), ocr_engine: 'backend' };
@@ -1140,7 +1407,10 @@ async function _enrichBlocksWithFonts(imgEl, blocks) {
   }
   const enriched = [];
   for (const block of blocks) {
-    if (block.font_family && block.font_family !== 'sans-serif') { enriched.push({ ...block }); continue; }
+    // Only classify when the source did not tell us the font. A JSON payload
+    // that names one is authoritative; OCR output never does.
+    const known = block.font_family || block.fontFamily;
+    if (known && known !== 'sans-serif') { enriched.push({ ...block, font_family: known }); continue; }
     const predicted = await EdgeML.predictFont(imgEl, block.x, block.y, block.w, block.h);
     enriched.push({ ...block, font_family: predicted });
   }
@@ -1208,18 +1478,27 @@ function handleDragOver(event) {
 function handleDragLeave() { document.getElementById('welcome-drop').classList.remove('drag-over'); }
 function handleFileDrop(event)      { event.preventDefault(); document.getElementById('welcome-drop').classList.remove('drag-over'); const f = event.dataTransfer.files[0]; if (f) _processFile(f); }
 function handleModalDrop(event)     { event.preventDefault(); document.getElementById('modal-drop-zone').classList.remove('drag-over'); const f = event.dataTransfer.files[0]; if (f) _processFile(f); }
-function handleModalFileInput(evt)  { const f = evt.target.files[0]; if (f) _processFile(f); }
-function handleHiddenFileInput(evt) { const f = evt.target.files[0]; if (f) _processFile(f); }
+// Reset .value after reading the file — otherwise re-selecting the same
+// file a second time (e.g. retrying after a confusing first result) fires
+// no 'change' event at all, since the input's value never changed. From the
+// user's side that looks exactly like the click doing nothing.
+function handleModalFileInput(evt)  { const f = evt.target.files[0]; evt.target.value = ''; if (f) _processFile(f); }
+function handleHiddenFileInput(evt) { const f = evt.target.files[0]; evt.target.value = ''; if (f) _processFile(f); }
+
+const SUPPORTED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'];
 
 /**
  * _processFile(file)
  * ─────────────────────────────────────────────────────────────────
- * Routes dropped / selected files. Accepts ONLY:
- *   .json  → parse and loadPayload()
- *   .jpg / .jpeg → offline OCR → loadPayload()
- *   .pdf   → PDF.js render page 1 → offline OCR → loadPayload()
+ * Routes dropped / selected files:
+ *   .json                            → parse and loadPayload()
+ *   .jpg .jpeg .png .webp .bmp .gif  → offline OCR → loadPayload()
+ *   .pdf                             → PDF.js page 1 → offline OCR → loadPayload()
  *
- * Any other extension shows a clear error toast.
+ * Any other extension shows a clear error toast. Everything the browser can
+ * decode into an <img> works here — OCR and the canvas export never see the
+ * container format, so restricting this to JPEG only turned away PNGs
+ * (by far the most common source for screenshots) for no reason.
  * ─────────────────────────────────────────────────────────────────
  */
 async function _processFile(file) {
@@ -1227,9 +1506,9 @@ async function _processFile(file) {
 
   const name = file.name.toLowerCase();
   const isJson = file.type === 'application/json' || name.endsWith('.json');
-  const isJpeg = file.type === 'image/jpeg' || file.type === 'image/jpg'
-               || name.endsWith('.jpg') || name.endsWith('.jpeg');
   const isPdf  = file.type === 'application/pdf' || name.endsWith('.pdf');
+  const isImage = (file.type.startsWith('image/') && !file.type.includes('svg'))
+               || SUPPORTED_IMAGE_EXT.some((ext) => name.endsWith(ext));
 
   /* ── JSON payload ─────────────────────────────────────────────── */
   if (isJson) {
@@ -1242,8 +1521,8 @@ async function _processFile(file) {
     return;
   }
 
-  /* ── JPG / JPEG image ─────────────────────────────────────────── */
-  if (isJpeg) {
+  /* ── Raster image ─────────────────────────────────────────────── */
+  if (isImage) {
     _setStatusBusy('Detecting text…');
     Toast.show('Detecting text…', 'info', 5000);
     _showProgress(10);
@@ -1295,7 +1574,7 @@ async function _processFile(file) {
   }
 
   /* ── Unsupported type ────────────────────────────────────────── */
-  Toast.show('Unsupported file type. Only JPG and PDF are allowed.', 'error');
+  Toast.show('Unsupported file type — use an image (JPG/PNG/WEBP/BMP), a PDF, or a JSON payload.', 'error', 5000);
 }
 
 

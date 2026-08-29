@@ -1,4 +1,23 @@
-# Place ONNX Runtime Web assets here for offline use.
-# Expected files:
-# - ort.min.js
-# - ort-wasm.wasm (and optional SIMD/threads variants)
+# ONNX Runtime Web assets for offline use.
+#
+# The loader and the .wasm MUST come from the same release: the loader
+# fetches a version-specific artifact name, so a newer ort.*.js beside an
+# older .wasm 404s at session-create time and the font classifier silently
+# falls back to "Arial" for every block.
+#
+# Currently vendored: 1.26.0, wasm-only build.
+#   ort.wasm.min.js               ← loader (referenced by index.html)
+#   ort-wasm-simd-threaded.mjs    ← module the loader dynamically imports
+#   ort-wasm-simd-threaded.wasm   ← the runtime itself
+#
+# Refresh with:
+#   V=1.26.0
+#   for f in ort.wasm.min.js ort-wasm-simd-threaded.mjs ort-wasm-simd-threaded.wasm; do
+#     curl -LO "https://cdn.jsdelivr.net/npm/onnxruntime-web@$V/dist/$f"
+#   done
+#
+# Do NOT add the full ort.min.js bundle unless you also vendor the 26 MB
+# ort-wasm-simd-threaded.jsep.wasm it requires; main.js only ever requests
+# the 'wasm' execution provider.
+#
+# Verify with: npm run check

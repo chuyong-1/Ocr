@@ -45,7 +45,7 @@ log = logging.getLogger("pixelscribe")
 
 # ─── Constants ──────────────────────────────────────────────────────────────
 BASE_DIR        = Path(__file__).parent
-STATIC_DIR      = BASE_DIR.parent / "frontend"
+STATIC_DIR      = BASE_DIR.parent / "www"   # the browser app lives in www/
 MASK_DILATION   = 8          # px — expand mask slightly to catch glyph edges
 INPAINT_RADIUS  = 12         # px — neighbourhood radius for cv2.inpaint
 INPAINT_METHOD  = cv2.INPAINT_TELEA   # TELEA | NS (Navier-Stokes)

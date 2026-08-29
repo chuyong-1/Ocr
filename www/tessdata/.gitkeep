@@ -1,1 +1,10 @@
-# Place tessdata language files here for offline OCR (e.g. eng.traineddata).
+# tessdata language files for offline OCR, e.g. eng.traineddata.
+#
+# Store them UNCOMPRESSED. main.js passes gzip:false, because Tesseract.js
+# otherwise appends ".gz" to the filename and the request 404s.
+#
+# Download: https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata
+# To add a language, drop <lang>.traineddata here and change
+# OFFLINE_OCR_LANG in www/main.js.
+#
+# Verify with: npm run check

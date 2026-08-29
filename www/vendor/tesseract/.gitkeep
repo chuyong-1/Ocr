@@ -1,5 +1,13 @@
-# Place local Tesseract.js assets here for offline OCR.
-# Expected files:
-# - tesseract.min.js
-# - worker.min.js
-# - tesseract-core.wasm.js
+# Local Tesseract.js assets for offline OCR.
+#
+# All four files below plus ../../tessdata/eng.traineddata must be present.
+# main.js probes for them and only then passes workerPath / corePath /
+# langPath; if any one is missing it falls back to the CDN for all of them.
+#   tesseract.min.js          ← main library
+#   worker.min.js             ← opts.workerPath
+#   tesseract-core.wasm.js    ← opts.corePath
+#   tesseract-core.wasm       ← loaded by the core glue, same directory
+#
+# Vendored version: 4.x (matches the v4 createWorker(lang, oem, opts) API).
+#
+# Verify with: npm run check

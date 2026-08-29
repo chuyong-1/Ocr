@@ -1,4 +1,17 @@
 {
+  "name": "pixelscribe",
+  "version": "3.1.0",
+  "description": "Offline, content-aware image text editor. OCR, inpainting and font classification all run in the browser via WebAssembly.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "serve": "node server.js",
+    "check": "node scripts/check-assets.js",
+    "sync": "cap sync",
+    "android": "cap run android"
+  },
   "dependencies": {
     "@capacitor/android": "^8.3.4",
     "@capacitor/cli": "^8.3.4",

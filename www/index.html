@@ -8,14 +8,34 @@
   <meta name="theme-color" content="#111118" />
   <meta name="mobile-web-app-capable" content="yes" />
   <title>PixelScribe — Content-Aware Text Editor</title>
+  <!-- Inline SVG favicon: keeps the app a single self-contained page
+       and avoids a 404 on every load. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236C63FF'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='bold' fill='%23fff' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E" />
 
   <!-- ═══════════════════════════════════════════════════════════════
        EDGE AI LIBRARIES  (WebAssembly — no server required)
   ════════════════════════════════════════════════════════════════ -->
 
-  <!-- ONNX Runtime Web: runs font_classifier.onnx in the browser via WASM -->
-    <script src="./vendor/onnx/ort.min.js"
-      onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js';"></script>
+  <!-- OpenCV.js load shim.
+       opencv.js is `async`, so it can finish before main.js (loaded at the
+       end of <body>) has defined onOpenCvLoad. Declaring the hook here, in
+       document order before the tag that uses it, removes that race. -->
+  <script>
+    window.__cvLoaded = false;
+    function onOpenCvLoad() {
+      window.__cvLoaded = true;
+      // main.js installs the real handler; until then just record the event.
+      if (typeof window.__onCvReady === 'function') window.__onCvReady();
+    }
+  </script>
+
+  <!-- ONNX Runtime Web 1.26.0 — WASM-only build.
+       Pairs with ./vendor/onnx/ort-wasm-simd-threaded.{mjs,wasm}. The full
+       `ort.min.js` bundle would instead demand the 26 MB `.jsep.wasm`
+       (WebGPU) artifact, which we neither ship nor use. Keep the CDN
+       fallback pinned to the same version as the vendored .wasm. -->
+    <script src="./vendor/onnx/ort.wasm.min.js"
+      onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/ort.wasm.min.js';"></script>
 
   <!-- PDF.js: renders uploaded PDF pages to a canvas for image extraction -->
     <script src="./vendor/pdfjs/pdf.min.js"
@@ -29,7 +49,8 @@
       onerror="this.onerror=null;this.remove();var s=document.createElement('script');s.async=true;s.src='https://docs.opencv.org/4.8.0/opencv.js';s.onload=onOpenCvLoad;s.onerror=function(){console.error('[PixelScribe] OpenCV.js failed to load');};document.head.appendChild(s);">
     </script>
 
-  <!-- PDF.js: point the web worker at the matching CDN worker bundle -->
+  <!-- PDF.js: point the web worker at the local bundle.
+       main.js re-resolves this (local → CDN) once it boots. -->
   <script>
     // Must run after pdf.min.js is parsed; inline script tags execute in order.
     if (typeof pdfjsLib !== 'undefined') {
@@ -37,43 +58,12 @@
     }
   </script>
 
-  <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- Google Fonts: Syne (display) + JetBrains Mono (mono) + Instrument Sans (body) -->
+  <!-- Google Fonts: Syne (display) + JetBrains Mono (mono) + Instrument Sans (body).
+       Purely decorative — every rule below carries a system-font fallback, so
+       the UI is unchanged in layout when this fails to load (offline / mobile). -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-
-  <!-- Tailwind config extension -->
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            display: ['Syne', 'sans-serif'],
-            mono:    ['JetBrains Mono', 'monospace'],
-            body:    ['Instrument Sans', 'sans-serif'],
-          },
-          colors: {
-            ink:     '#0A0A0F',
-            surface: '#111118',
-            panel:   '#16161F',
-            rail:    '#1E1E2A',
-            border:  '#2A2A38',
-            muted:   '#4A4A62',
-            ghost:   '#6B6B88',
-            text:    '#E8E8F0',
-            dim:     '#9898B0',
-            accent:  '#6C63FF',
-            accentL: '#9B95FF',
-            amber:   '#F59E0B',
-            red:     '#EF4444',
-            green:   '#22C55E',
-          }
-        }
-      }
-    };
-  </script>
 
   <style>
     /* ════════════════════════════════════════════════════════
@@ -561,6 +551,7 @@
     ════════════════════════════════════════════════════════ */
     .txt-block {
       position: absolute;
+      box-sizing: border-box;
       pointer-events: auto;
       touch-action: manipulation;
       cursor: text;
@@ -1490,7 +1481,7 @@
       <div class="topbar-sep desktop-only"></div>
       <div class="topbar-tag desktop-only">edge ai · offline · wasm</div>
       </div>
-      <button type="button" class="tool-btn primary topbar-import-btn" id="btn-import" data-tip="Import JSON payload, JPG, or PDF" onclick="openModal()">
+      <button type="button" class="tool-btn primary topbar-import-btn" id="btn-import" data-tip="Import an image, a PDF, or a JSON payload" onclick="openModal()">
         <svg width="16" height="16" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4a1 1 0 011-1h3l1.5 2H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" stroke-width="1.4"/></svg>
         Import
       </button>
@@ -1555,7 +1546,7 @@
         <div class="empty-title">No blocks loaded</div>
         <div class="empty-sub">
           <span class="cta-mobile">Tap Import to select an image or PDF</span>
-          <span class="cta-desktop">Import a JSON payload or<br>drag a JPG / PDF to begin</span>
+          <span class="cta-desktop">Import a JSON payload or<br>drag an image / PDF to begin</span>
         </div>
       </div>
     </div>
@@ -1564,7 +1555,7 @@
 
     <div class="upload-btn" onclick="openModal()" id="sidebar-upload-btn">
       <div style="font-size:18px;margin-bottom:4px;opacity:0.4;">⊕</div>
-      <div>Import JPG, PDF, or JSON</div>
+      <div>Import an image, PDF, or JSON</div>
     </div>
 
   </aside>
@@ -1583,7 +1574,7 @@
       <div class="welcome-desktop-only">
         <div class="welcome-glyph">EDIT<br>TEXT</div>
         <div class="welcome-cta">
-          <span class="cta-desktop">Import JSON payload · Drag JPG / PDF · Press Ctrl+O</span>
+          <span class="cta-desktop">Import JSON payload · Drag an image / PDF · Press Ctrl+O</span>
         </div>
       </div>
     </div>
@@ -1765,7 +1756,7 @@
 
       <div class="tab-row">
         <button class="tab-btn active" id="tab-json"  onclick="switchTab('json')">Paste JSON</button>
-        <button class="tab-btn"        id="tab-image" onclick="switchTab('image')">JPG / PDF / JSON file</button>
+        <button class="tab-btn"        id="tab-image" onclick="switchTab('image')">Image / PDF / JSON file</button>
         <button class="tab-btn"        id="tab-url"   onclick="switchTab('url')">Image URL</button>
       </div>
 
@@ -1786,16 +1777,16 @@
              ondragover="event.preventDefault();this.classList.add('drag-over')"
              ondrop="handleModalDrop(event)"
              ondragleave="this.classList.remove('drag-over')">
-          <!-- accept JPG, PDF, and JSON only -->
-          <input type="file" id="file-img-input" accept=".jpg,.jpeg,.pdf,.json"
+          <!-- images (JPG/PNG/WEBP/BMP/GIF), PDF, and JSON payloads -->
+          <input type="file" id="file-img-input" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.pdf,.json"
                  style="display:none" onchange="handleModalFileInput(event)" />
           <div class="drop-icon">⬆</div>
           <div class="drop-text">
             <span class="cta-mobile">Tap here to select an image or PDF</span>
-            <span class="cta-desktop">Drop a JPG, PDF, or JSON file here</span>
+            <span class="cta-desktop">Drop an image, PDF, or JSON file here</span>
           </div>
           <!-- PDF.js renders page 1 of uploaded PDFs to a canvas locally -->
-          <div class="drop-sub">JPG · PDF (rendered via PDF.js) · JSON · max 30 MB</div>
+          <div class="drop-sub">JPG · PNG · WEBP · BMP · PDF (via PDF.js) · JSON</div>
         </div>
           <div class="modal-hint" style="margin-top:10px;">
           <strong style="color:#9B95FF;">PDF files</strong> are rendered client-side by PDF.js at 3× scale
@@ -1826,7 +1817,7 @@
 </div>
 
 <!-- Hidden file input for drag-drop on canvas -->
-<input type="file" id="file-hidden" accept=".jpg,.jpeg,.pdf,.json" style="display:none"
+<input type="file" id="file-hidden" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.pdf,.json" style="display:none"
        onchange="handleHiddenFileInput(event)" />
 
 <!-- Hidden canvas for export -->
