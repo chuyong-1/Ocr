@@ -1,3 +1,7 @@
+<p align="center">
+  <img width="100%" src="https://capsule-render.vercel.app/api?type=waving&color=0:000000,40:5C0000,100:FF1E1E&height=180&section=header&text=PixelScribe&fontSize=50&fontColor=FFFFFF&fontAlignY=36&animation=fadeIn&desc=Offline%20in-browser%20image%20text%20editor&descSize=16&descAlignY=58&descColor=FFD6D6" alt="PixelScribe" />
+</p>
+
 # PixelScribe — Offline Content-Aware Image Text Editor
 
 Remove and replace text in images. OCR, background inpainting and font
