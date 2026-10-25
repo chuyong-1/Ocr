@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#111118" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <title>PixelScribe — Content-Aware Text Editor</title>
+  <title>PixelScribe</title>
   <!-- Inline SVG favicon: keeps the app a single self-contained page
        and avoids a 404 on every load. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%236C63FF'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' font-weight='bold' fill='%23fff' text-anchor='middle'%3EP%3C/text%3E%3C/svg%3E" />
@@ -58,502 +58,365 @@
     }
   </script>
 
-  <!-- Google Fonts: Syne (display) + JetBrains Mono (mono) + Instrument Sans (body).
-       Purely decorative — every rule below carries a system-font fallback, so
-       the UI is unchanged in layout when this fails to load (offline / mobile). -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-
   <style>
     /* ════════════════════════════════════════════════════════
-       BASE & RESET
+       TOKENS & BASE
+       System fonts only: the app is offline, so nothing here may depend
+       on a network font loading.
     ════════════════════════════════════════════════════════ */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --safe-top: env(safe-area-inset-top, 0px);
-      --safe-right: env(safe-area-inset-right, 0px);
-      --safe-bottom: env(safe-area-inset-bottom, 0px);
-      --safe-left: env(safe-area-inset-left, 0px);
-      --header-h: 56px;
-      --mobnav-h: 64px;
-      --status-h: 40px;
+      --bg: #0B0B10;
+      --panel: #121219;
+      --panel-2: #181822;
+      --line: #24242F;
+      --line-2: #30303D;
+      --text: #ECECF3;
+      --muted: #9A9AB0;
+      --faint: #62627A;
+      --accent: #6C63FF;
+      --accent-hi: #8A83FF;
+      --accent-soft: rgba(108, 99, 255, 0.14);
+      --ok: #22C55E;
+      --warn: #F59E0B;
+      --err: #EF4444;
+      --ui: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+      --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+      --topbar-h: 52px;
+      --status-h: 26px;
+      --mobnav-h: 60px;
+      --radius: 8px;
     }
 
-    html {
-      height: 100%;
-      height: 100dvh;
-      background: #0A0A0F;
-    }
-
+    html, body { height: 100%; height: 100dvh; }
     body {
-      height: 100%;
-      height: 100dvh;
-      background: #0A0A0F;
-      color: #E8E8F0;
-      font-family: 'Instrument Sans', sans-serif;
-      font-size: 16px;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.45 var(--ui);
       overflow: hidden;
       -webkit-font-smoothing: antialiased;
       -webkit-text-size-adjust: 100%;
-      touch-action: manipulation;
-      padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    :focus-visible { outline: 2px solid var(--accent-hi); outline-offset: 2px; }
 
-    /* ════════════════════════════════════════════════════════
-       SCROLLBAR
-    ════════════════════════════════════════════════════════ */
-    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #2A2A38; border-radius: 2px; }
-    ::-webkit-scrollbar-thumb:hover { background: #6C63FF; }
+    ::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+    ::-webkit-scrollbar-thumb:hover { background-color: var(--accent); }
+
+    .hidden { display: none !important; }
 
     /* ════════════════════════════════════════════════════════
-       LAYOUT SHELL — 3-column grid
+       SHELL — mobile first: topbar / canvas / bottom nav / status.
+       Side panels are slide-in drawers until the desktop breakpoint.
     ════════════════════════════════════════════════════════ */
     #app {
       display: grid;
-      grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr auto auto;
-      grid-template-areas:
-        "topbar"
-        "canvas"
-        "mobilenav"
-        "statusbar";
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--mobnav-h) var(--status-h);
+      grid-template-areas: "topbar" "canvas" "mobilenav" "statusbar";
       height: 100%;
-      width: 100%;
-      max-width: 100%;
       overflow: hidden;
-      min-height: 0;
     }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      height: 32px; padding: 0 12px;
+      background: transparent; border: 1px solid transparent; border-radius: 6px;
+      color: var(--muted); font-size: 13px; font-weight: 500; white-space: nowrap;
+      cursor: pointer; flex-shrink: 0; -webkit-tap-highlight-color: transparent;
+      transition: background .12s, border-color .12s, color .12s;
+    }
+    .btn:hover:not(:disabled) { background: var(--panel-2); border-color: var(--line-2); color: var(--text); }
+    .btn:disabled { opacity: .35; cursor: not-allowed; }
+    .btn svg { flex-shrink: 0; }
+    .btn-icon { width: 32px; padding: 0; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hi); border-color: var(--accent-hi); color: #fff; }
+    .btn-secondary { background: var(--accent-soft); border-color: rgba(108,99,255,.35); color: #C9C5FF; }
+    .btn-secondary:hover:not(:disabled) { background: rgba(108,99,255,.24); border-color: var(--accent); color: #fff; }
+    .btn-link { color: var(--faint); padding: 0 4px; }
+    .btn-link:hover:not(:disabled) { background: none; border-color: transparent; color: var(--text); text-decoration: underline; }
+    .btn.full { width: 100%; }
+
+    .select, .input {
+      height: 32px; padding: 0 10px;
+      background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px;
+      color: var(--text); font-size: 13px; outline: none;
+      transition: border-color .12s;
+    }
+    .select:focus, .input:focus { border-color: var(--accent); }
+    .select:disabled, .input:disabled { opacity: .4; cursor: not-allowed; }
+    .select {
+      appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 28px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239A9AB0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center;
+    }
+    .select optgroup { color: var(--faint); font-style: normal; }
+    .select option { color: var(--text); background: var(--panel-2); }
+    .full { width: 100%; }
+    .mono { font-family: var(--mono); }
 
     /* ════════════════════════════════════════════════════════
        TOPBAR
     ════════════════════════════════════════════════════════ */
     #topbar {
       grid-area: topbar;
-      display: flex;
-      flex-direction: column;
-      flex-shrink: 0;
-      padding: 10px 14px 12px;
-      background: #111118;
-      border-bottom: 1px solid #1E1E2A;
-      gap: 0;
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 12px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
       z-index: 50;
-      min-height: var(--header-h);
-    }
-
-    .topbar-header-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      width: 100%;
-      min-height: 48px;
-    }
-
-    .topbar-brand {
-      display: flex;
-      align-items: center;
-      flex-shrink: 1;
       min-width: 0;
     }
-
-    .topbar-import-btn {
-      flex-shrink: 0;
-      min-width: 108px;
-      padding: 0 20px !important;
-      font-weight: 600;
+    .brand { display: flex; align-items: center; gap: 8px; flex-shrink: 0; margin-right: 4px; }
+    .brand-mark {
+      width: 26px; height: 26px; border-radius: 7px;
+      display: grid; place-items: center;
+      background: var(--accent); color: #fff;
+      font: 700 15px/1 Georgia, serif;
     }
-
-    .topbar-scroll {
-      display: none;
-    }
-
-    .wordmark {
-      font-family: 'Syne', sans-serif;
-      font-weight: 800;
-      font-size: 15px;
-      letter-spacing: -0.02em;
-      color: #E8E8F0;
-      white-space: nowrap;
-    }
-    .wordmark em {
-      font-style: normal;
-      color: #6C63FF;
-    }
-
-    .topbar-sep {
-      width: 1px;
-      height: 20px;
-      background: #2A2A38;
-      margin: 0 16px;
-    }
-
-    .topbar-tag {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px;
-      font-weight: 400;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: #4A4A62;
-    }
-
-    /* Toolbar action groups */
-    .toolbar-group {
-      display: flex;
-      align-items: center;
-      gap: 2px;
-    }
-
-    .tool-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      min-height: 48px;
-      min-width: 48px;
-      height: 48px;
-      padding: 0 14px;
-      background: transparent;
-      border: 1px solid transparent;
-      border-radius: 8px;
-      color: #6B6B88;
-      font-family: 'Instrument Sans', sans-serif;
-      font-size: 16px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.12s ease;
-      white-space: nowrap;
-      flex-shrink: 0;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .tool-btn:hover:not(:disabled) {
-      background: #1E1E2A;
-      border-color: #2A2A38;
-      color: #E8E8F0;
-    }
-    .tool-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-    .tool-btn.primary {
-      background: #6C63FF;
-      border-color: #6C63FF;
-      color: #fff;
-    }
-    .tool-btn.primary:hover:not(:disabled) {
-      background: #7C74FF;
-      border-color: #7C74FF;
-    }
-    .tool-btn.danger:hover:not(:disabled) {
-      background: rgba(239,68,68,0.1);
-      border-color: rgba(239,68,68,0.3);
-      color: #EF4444;
-    }
+    .brand-name { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+    .tb-sep { width: 1px; height: 20px; background: var(--line-2); flex-shrink: 0; margin: 0 4px; }
+    .tb-group { display: flex; align-items: center; gap: 2px; }
+    .tb-spacer { flex: 1; min-width: 0; }
+    .zoom-label { min-width: 46px; text-align: center; font: 12px var(--mono); color: var(--muted); }
+    .export-group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .export-group .select { width: auto; }
 
     /* ════════════════════════════════════════════════════════
-       LEFT SIDEBAR — Layers / Blocks
+       SIDE PANELS (drawers on mobile, columns on desktop)
     ════════════════════════════════════════════════════════ */
-    #sidebar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      bottom: 0;
-      width: min(300px, 88vw);
+    .panel {
+      position: fixed; top: 0; bottom: 0;
+      width: min(320px, 88vw);
       z-index: 60;
-      background: #111118;
-      border-right: 1px solid #1E1E2A;
-      display: flex;
-      flex-direction: column;
+      display: flex; flex-direction: column;
+      background: var(--panel);
       overflow: hidden;
-      transform: translateX(-105%);
-      transition: transform 0.22s ease;
+      transition: transform .22s ease;
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
-      box-shadow: 8px 0 32px rgba(0, 0, 0, 0.45);
+      box-shadow: 0 0 40px rgba(0,0,0,.5);
     }
-    #sidebar.mobile-open { transform: translateX(0); }
+    #sidebar     { left: 0;  border-right: 1px solid var(--line); transform: translateX(-105%); }
+    #props-panel { right: 0; border-left: 1px solid var(--line);  transform: translateX(105%); }
+    .panel.mobile-open { transform: none; }
 
-    .panel-header {
-      padding: 12px 14px 8px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px;
-      font-weight: 500;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: #4A4A62;
-      border-bottom: 1px solid #1A1A24;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+    #panel-backdrop {
+      position: fixed; inset: 0; z-index: 55;
+      background: rgba(0,0,0,.55);
+      opacity: 0; pointer-events: none; transition: opacity .2s;
     }
+    #panel-backdrop.visible { opacity: 1; pointer-events: auto; }
 
-    .panel-header span {
-      background: #1E1E2A;
-      color: #6B6B88;
-      font-size: 9px;
-      padding: 1px 6px;
-      border-radius: 20px;
+    .panel-head {
+      display: flex; align-items: center; gap: 8px;
+      height: 44px; padding: 0 8px 0 14px; flex-shrink: 0;
+      border-bottom: 1px solid var(--line);
+      font-weight: 600; font-size: 13px;
     }
-
-    /* Block layer list */
-    #layer-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 6px 8px;
+    .panel-head .title { flex: 1; }
+    .count {
+      font: 11px var(--mono); color: var(--muted);
+      background: var(--panel-2); border: 1px solid var(--line-2);
+      padding: 0 7px; border-radius: 10px; line-height: 18px;
     }
+    .panel-scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+    .panel-hint { padding: 10px 14px 4px; font-size: 12px; color: var(--faint); }
 
+    /* Layer list (items built by main.js) */
+    #layer-list { padding: 6px 8px 12px; }
     .layer-item {
-      display: flex;
+      display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 10px; row-gap: 1px;
       align-items: center;
-      gap: 8px;
-      padding: 6px 8px;
-      border-radius: 5px;
+      padding: 7px 8px; margin-bottom: 2px;
+      border: 1px solid transparent; border-radius: 6px;
       cursor: pointer;
-      border: 1px solid transparent;
-      transition: all 0.1s ease;
-      margin-bottom: 2px;
+      animation: fadeUp .15s ease both;
     }
-    .layer-item:hover {
-      background: #16161F;
-      border-color: #2A2A38;
-    }
-    .layer-item.active {
-      background: rgba(108, 99, 255, 0.1);
-      border-color: rgba(108, 99, 255, 0.3);
-    }
+    .layer-item:hover  { background: var(--panel-2); border-color: var(--line-2); }
+    .layer-item.active { background: var(--accent-soft); border-color: rgba(108,99,255,.45); }
+    .layer-swatch { grid-row: 1 / span 2; width: 10px; height: 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,.15); }
+    .layer-text { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .layer-meta { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .layer-item.active .layer-meta { color: var(--muted); }
 
-    .layer-swatch {
-      width: 10px;
-      height: 10px;
-      border-radius: 2px;
-      flex-shrink: 0;
-      border: 1px solid rgba(255,255,255,0.08);
-    }
+    .empty-state { padding: 40px 18px; text-align: center; color: var(--faint); }
+    .empty-title { font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+    .empty-sub { font-size: 12px; }
 
-    .layer-text {
-      font-size: 11.5px;
-      color: #9898B0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      flex: 1;
-      line-height: 1.3;
+    /* Properties panel: one of two states. */
+    .props-empty {
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      padding: 48px 24px; text-align: center; color: var(--faint); font-size: 13px;
     }
-    .layer-item.active .layer-text { color: #E8E8F0; }
+    .props-empty svg { color: var(--line-2); }
+    .props-body { display: none; }
+    #props-panel.has-selection .props-empty { display: none; }
+    #props-panel.has-selection .props-body  { display: block; }
+    #props-panel.is-image .text-only { display: none; }
 
-    .layer-meta {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px;
-      color: #4A4A62;
-      white-space: nowrap;
+    .props-section { padding: 14px; border-bottom: 1px solid var(--line); }
+    .props-label {
+      font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--faint); margin-bottom: 8px;
     }
+    details.props-section > summary {
+      cursor: pointer; list-style: none;
+      font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint);
+    }
+    details.props-section > summary::-webkit-details-marker { display: none; }
+    details.props-section > summary::before { content: '▸'; display: inline-block; width: 14px; transition: transform .15s; }
+    details.props-section[open] > summary::before { transform: rotate(90deg); }
+    details.props-section[open] > summary { margin-bottom: 10px; }
 
-    /* Empty state */
-    .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      gap: 10px;
-      padding: 24px;
-      text-align: center;
+    .original-text {
+      padding: 8px 10px; border-radius: 6px;
+      background: var(--bg); border: 1px solid var(--line);
+      color: var(--muted); font-size: 13px; word-break: break-word;
     }
-    .empty-icon {
-      width: 44px;
-      height: 44px;
-      background: #16161F;
-      border: 1px solid #2A2A38;
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-    }
-    .empty-title {
-      font-size: 12px;
-      font-weight: 600;
-      color: #6B6B88;
-    }
-    .empty-sub {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px;
-      color: #3A3A52;
-      line-height: 1.6;
-      letter-spacing: 0.05em;
-    }
+    .field { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 10px; }
+    .field-label { font-size: 12px; color: var(--muted); }
+    .field-controls { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .font-match { margin-top: 6px; font-size: 11.5px; color: var(--faint); line-height: 1.4; }
+    .font-match span { color: #B7B2FF; }
+    .help { margin-top: 8px; font-size: 12px; color: var(--faint); }
 
-    /* Upload button in sidebar */
-    .upload-btn {
-      margin: 10px 8px;
-      min-height: 48px;
-      padding: 12px 14px;
-      background: #16161F;
-      border: 1.5px dashed #2A2A38;
-      border-radius: 8px;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      color: #6B6B88;
-      font-size: 16px;
-      font-weight: 500;
-      -webkit-tap-highlight-color: transparent;
+    .stepper {
+      display: flex; align-items: stretch; flex: 1; min-width: 0; height: 32px;
+      background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden;
     }
-    .upload-btn:hover {
-      border-color: #6C63FF;
-      background: rgba(108,99,255,0.05);
-      color: #9B95FF;
+    .stepper input {
+      flex: 1; min-width: 0; width: 0; text-align: center;
+      background: transparent; border: 0; outline: none; font-family: var(--mono); font-size: 13px;
+      -moz-appearance: textfield;
     }
+    .stepper input::-webkit-inner-spin-button,
+    .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; }
+    .step-btn {
+      width: 32px; flex-shrink: 0; background: transparent; border: 0; color: var(--muted);
+      font-size: 16px; cursor: pointer;
+    }
+    .step-btn:first-child { border-right: 1px solid var(--line-2); }
+    .step-btn:last-child  { border-left: 1px solid var(--line-2); }
+    .step-btn:hover:not(:disabled) { background: var(--line); color: var(--text); }
+    .step-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+    .toggle {
+      width: 32px; height: 32px; flex-shrink: 0;
+      background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px;
+      color: var(--muted); cursor: pointer; font-family: Georgia, serif; font-size: 15px;
+    }
+    .toggle:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+    .toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .toggle:disabled { opacity: .35; cursor: not-allowed; }
+
+    .color-swatch {
+      position: relative; width: 32px; height: 32px; flex-shrink: 0;
+      border-radius: 6px; border: 1px solid var(--line-2); cursor: pointer; overflow: hidden;
+    }
+    .color-swatch input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; }
+    #prop-color-hex { flex: 1; min-width: 0; width: 0; font-family: var(--mono); text-transform: uppercase; }
+
+    .coord-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .coord-cell { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+    .coord-key { font-size: 10.5px; color: var(--faint); }
+    .coord-val { font: 12px var(--mono); color: var(--muted); }
+
+    .ocr-textarea {
+      width: 100%; height: 140px; resize: vertical;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px;
+      padding: 8px 10px; font: 12px/1.5 var(--mono); color: var(--text); outline: none;
+      margin-bottom: 8px;
+    }
+    .ocr-textarea:focus { border-color: var(--accent); }
 
     /* ════════════════════════════════════════════════════════
-       CANVAS AREA
+       CANVAS
     ════════════════════════════════════════════════════════ */
     #canvas-area {
       grid-area: canvas;
       position: relative;
-      min-height: 0;
-      overflow: auto;
-      overflow-x: auto;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      overscroll-behavior: contain;
-      touch-action: pan-x pan-y;
-      background:
-        radial-gradient(ellipse 60% 50% at 30% 40%, rgba(108,99,255,0.04) 0%, transparent 70%),
-        radial-gradient(ellipse 40% 60% at 80% 70%, rgba(108,99,255,0.03) 0%, transparent 60%),
-        repeating-conic-gradient(#13131A 0% 25%, #0F0F16 0% 50%) 0 0 / 24px 24px;
       display: flex;
-      align-items: flex-start;
-      justify-content: flex-start;
+      min-width: 0; min-height: 0;
       padding: 16px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      background:
+        repeating-conic-gradient(#121218 0% 25%, #0E0E14 0% 50%) 0 0 / 24px 24px;
     }
 
-    /* Welcome / drop zone shown when no image is loaded */
     #welcome-drop {
-      position: absolute;
-      inset: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      pointer-events: auto;
-      cursor: pointer;
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
+      cursor: pointer; z-index: 5;
       -webkit-tap-highlight-color: transparent;
-      z-index: 5;
     }
-    #welcome-drop:active .welcome-card {
-      border-color: #9B95FF;
-      background: #1E1E30;
-      transform: scale(0.98);
-    }
-    #welcome-drop.drag-over .welcome-card {
-      border-color: #6C63FF;
-      background: rgba(108, 99, 255, 0.12);
-    }
-
     .welcome-card {
-      width: 90%;
-      max-width: 360px;
-      min-height: min(42vh, 320px);
-      padding: 36px 24px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 0;
-      background: linear-gradient(165deg, #1C1C2A 0%, #12121A 100%);
-      border: 2px dashed #6C63FF;
-      border-radius: 20px;
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
-      transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
-      pointer-events: none;
+      width: 100%; max-width: 440px;
+      padding: 32px 28px;
+      display: flex; flex-direction: column; align-items: center; text-align: center;
+      background: linear-gradient(165deg, #1A1A26 0%, #121219 100%);
+      border: 2px dashed rgba(108,99,255,.55);
+      border-radius: 16px;
+      box-shadow: 0 16px 48px rgba(0,0,0,.45);
+      transition: border-color .15s, background .15s, transform .1s;
     }
-
-    .welcome-upload-icon {
-      width: 72px;
-      height: 72px;
-      border-radius: 18px;
-      background: rgba(108, 99, 255, 0.18);
-      border: 1px solid rgba(108, 99, 255, 0.35);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #9B95FF;
-      margin-bottom: 20px;
+    #welcome-drop:hover .welcome-card { border-color: var(--accent-hi); }
+    #welcome-drop:active .welcome-card { transform: scale(.99); }
+    #welcome-drop.drag-over .welcome-card { border-color: var(--accent); background: rgba(108,99,255,.12); }
+    .welcome-icon {
+      width: 64px; height: 64px; border-radius: 16px; margin-bottom: 18px;
+      display: grid; place-items: center;
+      background: var(--accent-soft); border: 1px solid rgba(108,99,255,.35); color: var(--accent-hi);
     }
-
-    .welcome-title {
-      font-size: 1.25rem;
-      font-weight: 600;
-      color: #E8E8F0;
-      text-align: center;
-      line-height: 1.3;
-      margin-bottom: 10px;
+    .welcome-title { font-size: 20px; font-weight: 650; margin-bottom: 6px; }
+    .welcome-sub { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+    .welcome-steps {
+      list-style: none; counter-reset: step; text-align: left; width: 100%;
+      display: grid; gap: 8px; margin-bottom: 18px;
     }
-
-    .welcome-subtitle {
-      font-size: 1rem;
-      font-weight: 500;
-      color: #9B95FF;
-      text-align: center;
-      line-height: 1.45;
-      padding: 0 8px;
+    .welcome-steps li { counter-increment: step; display: flex; gap: 10px; align-items: baseline; color: var(--muted); font-size: 13px; }
+    .welcome-steps li::before {
+      content: counter(step); flex-shrink: 0;
+      width: 20px; height: 20px; border-radius: 50%;
+      display: inline-grid; place-items: center;
+      background: var(--panel-2); border: 1px solid var(--line-2);
+      font-size: 11px; color: var(--text);
     }
+    .welcome-formats { font: 11px var(--mono); color: var(--faint); letter-spacing: .04em; }
+    .cta-desktop { display: none; }
 
-    .welcome-glyph,
-    .welcome-cta,
-    .welcome-desktop-only {
-      display: none;
-    }
-
-    .welcome-cta .cta-desktop,
-    .empty-sub .cta-desktop,
-    .drop-text .cta-desktop { display: none; }
-    .welcome-cta .cta-mobile,
-    .empty-sub .cta-mobile,
-    .drop-text .cta-mobile  { display: inline; }
-
-    /* Workspace: the image + overlay container */
+    /* Workspace: image + overlay. CanvasView sets its width (= the zoom). */
     #workspace {
       position: relative;
-      display: none;  /* shown after image loads */
+      display: none;
       flex-shrink: 0;
-      box-shadow:
-        0 0 0 1px rgba(255,255,255,0.04),
-        0 4px 6px rgba(0,0,0,0.3),
-        0 20px 60px rgba(0,0,0,0.5),
-        0 60px 120px rgba(0,0,0,0.3);
-      border-radius: 3px;
+      /* Centres while it fits; collapses to 0 once zoomed past the canvas,
+         so the left/top edge stays scrollable. */
+      margin: auto;
+      box-shadow: 0 0 0 1px rgba(255,255,255,.05), 0 20px 60px rgba(0,0,0,.5);
+      border-radius: 2px;
       overflow: hidden;
     }
-
     #workspace img {
-      display: block;
-      max-width: 100%;
-      height: auto;
-      user-select: none;
-      pointer-events: none;
-      vertical-align: top;
+      display: block; width: 100%; height: auto;
+      user-select: none; pointer-events: none;
     }
+    #overlay { position: absolute; inset: 0; z-index: 2; }
 
-    /* Overlay: absolute-positioned typography container */
-    #overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      z-index: 2;
-      pointer-events: auto;
-    }
-
-    /* ════════════════════════════════════════════════════════
-       EDITABLE TEXT FIELDS
-    ════════════════════════════════════════════════════════ */
+    /* Editable text fields. Padding + border must stay 4px 6px + 1.5px:
+       main.js's FIELD_INSET_X / FIELD_INSET_Y compensate for exactly this. */
     .txt-block {
       position: absolute;
       box-sizing: border-box;
-      pointer-events: auto;
-      touch-action: manipulation;
       cursor: text;
       outline: none;
       line-height: 1.25;
@@ -563,891 +426,203 @@
       border: 1.5px solid transparent;
       border-radius: 2px;
       padding: 4px 6px;
-      min-height: 32px;
-      transition: border-color 0.12s ease, background 0.12s ease;
-      -webkit-user-select: text;
-      user-select: text;
-      -webkit-touch-callout: default;
+      touch-action: manipulation;
+      -webkit-user-select: text; user-select: text;
+      transition: border-color .12s, background .12s;
     }
-    .txt-block:hover {
-      border-color: rgba(108, 99, 255, 0.4);
-      background: rgba(108, 99, 255, 0.04);
-    }
+    /* Show where the editable lines are while the pointer is over the image. */
+    #workspace:hover .txt-block { border-color: rgba(108,99,255,.28); border-style: dashed; }
+    .txt-block:hover { border-color: rgba(108,99,255,.7) !important; background: rgba(108,99,255,.05); }
     .txt-block:focus,
-    .txt-block.selected {
-      border-color: #6C63FF;
-      background: rgba(108, 99, 255, 0.08);
-      z-index: 10;
-    }
+    .txt-block.selected { border-color: var(--accent) !important; border-style: solid !important; background: rgba(108,99,255,.08); z-index: 10; }
 
-    .txt-block.selected::before,
-    .txt-block.selected::after {
-      content: '';
-      position: absolute;
-      width: 6px;
-      height: 6px;
-      background: #6C63FF;
-      border: 1px solid #111118;
-      border-radius: 1px;
+    /* Kept as original image: the pixels underneath are the content. */
+    .txt-block.as-image {
+      color: transparent !important;
+      caret-color: transparent;
+      cursor: pointer;
+      -webkit-user-select: none; user-select: none;
     }
-    .txt-block.selected::before { top: -4px; left: -4px; }
-    .txt-block.selected::after  { bottom: -4px; right: -4px; }
+    #workspace:hover .txt-block.as-image { border-color: rgba(245,158,11,.35); }
+    .txt-block.as-image.selected { border-color: var(--warn) !important; background: rgba(245,158,11,.06); }
 
     /* ════════════════════════════════════════════════════════
-       RIGHT PROPERTIES PANEL
+       MOBILE NAV, MORE SHEET
     ════════════════════════════════════════════════════════ */
-    #props-panel {
-      position: fixed;
-      top: 0;
-      right: 0;
-      bottom: 0;
-      width: min(320px, 92vw);
-      z-index: 60;
-      background: #111118;
-      border-left: 1px solid #1E1E2A;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      transform: translateX(105%);
-      transition: transform 0.22s ease;
-      padding-top: env(safe-area-inset-top);
-      padding-bottom: env(safe-area-inset-bottom);
-      box-shadow: -8px 0 32px rgba(0, 0, 0, 0.45);
+    #mobile-nav {
+      grid-area: mobilenav;
+      display: flex; align-items: stretch; gap: 4px;
+      padding: 4px 8px;
+      background: var(--panel); border-top: 1px solid var(--line);
+      z-index: 45;
     }
-    #props-panel.mobile-open { transform: translateX(0); }
+    .mob-nav-btn {
+      flex: 1; min-width: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      background: transparent; border: 0; border-radius: 10px;
+      color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .mob-nav-btn:active { background: var(--panel-2); color: var(--text); }
+    .mob-nav-btn svg { width: 22px; height: 22px; }
 
-    #props-panel,
-    #sidebar #layer-list {
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
+    #mobile-more-sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 70;
+      background: var(--panel-2); border-top: 1px solid var(--line-2);
+      border-radius: 16px 16px 0 0;
+      padding: 14px 16px max(20px, env(safe-area-inset-bottom));
+      transform: translateY(110%); transition: transform .25s ease;
+      box-shadow: 0 -12px 40px rgba(0,0,0,.5);
     }
-
-    #panel-backdrop {
-      position: fixed;
-      inset: 0;
-      z-index: 55;
-      background: rgba(0, 0, 0, 0.55);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s ease;
-    }
-    #panel-backdrop.visible {
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    .props-section {
-      padding: 14px;
-      border-bottom: 1px solid #1A1A24;
-    }
-
-    .props-label {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px;
-      font-weight: 500;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: #4A4A62;
-      margin-bottom: 10px;
-    }
-
-    .field-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .field-row:last-child { margin-bottom: 0; }
-
-    .field-label {
-      font-size: 11px;
-      color: #6B6B88;
-      white-space: nowrap;
-      width: 64px;
-      flex-shrink: 0;
-    }
-
-    .field-input {
-      flex: 1;
-      background: #16161F;
-      border: 1px solid #2A2A38;
-      border-radius: 5px;
-      padding: 5px 8px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #E8E8F0;
-      outline: none;
-      transition: border-color 0.12s;
-      appearance: none;
-      -webkit-appearance: none;
-    }
-    .field-input:focus { border-color: #6C63FF; }
-    .field-input:disabled {
-      opacity: 0.3;
-      cursor: not-allowed;
-    }
-
-    select.field-input {
-      cursor: pointer;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B6B88' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 8px center;
-      padding-right: 24px;
-    }
-
-    .color-wrap {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex: 1;
-    }
-    .color-swatch {
-      width: 22px;
-      height: 22px;
-      border-radius: 4px;
-      border: 1px solid rgba(255,255,255,0.08);
-      cursor: pointer;
-      flex-shrink: 0;
-      position: relative;
-      overflow: hidden;
-    }
-    .color-swatch input[type="color"] {
-      position: absolute;
-      inset: 0;
-      opacity: 0;
-      width: 100%;
-      height: 100%;
-      cursor: pointer;
-      border: none;
-      padding: 0;
-    }
-    .color-hex {
-      flex: 1;
-      background: #16161F;
-      border: 1px solid #2A2A38;
-      border-radius: 5px;
-      padding: 5px 8px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #E8E8F0;
-      outline: none;
-      transition: border-color 0.12s;
-    }
-    .color-hex:focus { border-color: #6C63FF; }
-
-    .stepper {
-      display: flex;
-      align-items: center;
-      gap: 0;
-      background: #16161F;
-      border: 1px solid #2A2A38;
-      border-radius: 5px;
-      overflow: hidden;
-      flex: 1;
-    }
-    .stepper input {
-      flex: 1;
-      background: transparent;
-      border: none;
-      padding: 5px 6px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #E8E8F0;
-      outline: none;
-      text-align: center;
-      width: 0;
-      min-width: 0;
-    }
-    .stepper input::-webkit-inner-spin-button,
-    .stepper input::-webkit-outer-spin-button { -webkit-appearance: none; }
-    .stepper input[type=number] { -moz-appearance: textfield; }
-
-    .step-btn {
-      width: 22px;
-      height: 100%;
-      background: transparent;
-      border: none;
-      color: #4A4A62;
-      font-size: 14px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.1s;
-      border-right: 1px solid #2A2A38;
-      padding: 4px;
-    }
-    .step-btn:last-child { border-right: none; border-left: 1px solid #2A2A38; }
-    .step-btn:hover { background: #1E1E2A; color: #E8E8F0; }
-    .step-btn:disabled { opacity: 0.2; cursor: not-allowed; }
-
-    .apply-btn {
-      width: 100%;
-      padding: 8px 12px;
-      background: rgba(108,99,255,0.12);
-      border: 1px solid rgba(108,99,255,0.25);
-      border-radius: 5px;
-      color: #9B95FF;
-      font-family: 'Instrument Sans', sans-serif;
-      font-size: 11.5px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.12s;
-      margin-top: 10px;
-      letter-spacing: 0.02em;
-    }
-    .apply-btn:hover:not(:disabled) {
-      background: rgba(108,99,255,0.2);
-      border-color: #6C63FF;
-      color: #fff;
-    }
-    .apply-btn:disabled { opacity: 0.25; cursor: not-allowed; }
-
-    .coord-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-    }
-    .coord-cell {
-      background: #16161F;
-      border: 1px solid #1E1E2A;
-      border-radius: 5px;
-      padding: 6px 8px;
-    }
-    .coord-key {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px;
-      color: #4A4A62;
-      letter-spacing: 0.08em;
-      margin-bottom: 2px;
-    }
-    .coord-val {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #9898B0;
-    }
+    #mobile-more-sheet.open { transform: none; }
+    .sheet-zoom { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px; }
+    #more-zoom-label { min-width: 64px; text-align: center; font: 15px var(--mono); }
+    .sheet-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .sheet-grid .btn, .sheet-zoom .btn { height: 44px; background: var(--panel); border-color: var(--line-2); color: var(--text); }
 
     /* ════════════════════════════════════════════════════════
        STATUS BAR
     ════════════════════════════════════════════════════════ */
-    /* ── Mobile bottom navigation ── */
-    #mobile-nav {
-      grid-area: mobilenav;
-      display: flex;
-      align-items: stretch;
-      justify-content: space-around;
-      gap: 4px;
-      padding: 6px 8px 8px;
-      background: #111118;
-      border-top: 1px solid #1E1E2A;
-      z-index: 45;
-      min-height: var(--mobnav-h);
-    }
-
-    .mob-nav-btn {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-      min-height: 52px;
-      min-width: 0;
-      padding: 6px 4px;
-      background: transparent;
-      border: none;
-      border-radius: 10px;
-      color: #9898B0;
-      font-family: 'Instrument Sans', sans-serif;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .mob-nav-btn:active:not(:disabled) {
-      background: #1E1E2A;
-      color: #E8E8F0;
-    }
-    .mob-nav-btn:disabled {
-      opacity: 0.35;
-    }
-    .mob-nav-btn svg {
-      width: 22px;
-      height: 22px;
-      flex-shrink: 0;
-    }
-    .mob-nav-btn.mob-nav-primary {
-      color: #9B95FF;
-    }
-    .mob-nav-btn.mob-nav-primary:active:not(:disabled) {
-      background: rgba(108, 99, 255, 0.15);
-    }
-
-    #mobile-more-sheet {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      z-index: 70;
-      background: #16161F;
-      border-top: 1px solid #2A2A38;
-      border-radius: 16px 16px 0 0;
-      padding: 12px 16px max(20px, var(--safe-bottom));
-      transform: translateY(110%);
-      transition: transform 0.25s ease;
-      box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
-    }
-    #mobile-more-sheet.open {
-      transform: translateY(0);
-    }
-    .more-sheet-title {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: #4A4A62;
-      margin-bottom: 12px;
-      text-align: center;
-    }
-    .more-sheet-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-    }
-    .more-sheet-grid .tool-btn {
-      width: 100%;
-      flex-direction: column;
-      gap: 4px;
-      height: auto;
-      min-height: 64px;
-      padding: 10px 6px;
-      font-size: 12px;
-    }
-    #more-zoom-label {
-      grid-column: 1 / -1;
-      text-align: center;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 14px;
-      color: #E8E8F0;
-      padding: 8px;
-      background: #0A0A0F;
-      border-radius: 8px;
-      margin-bottom: 4px;
-    }
-
     #statusbar {
       grid-area: statusbar;
-      flex-shrink: 0;
-      background: #0D0D14;
-      border-top: 1px solid #1A1A24;
-      display: flex;
-      align-items: center;
-      padding: 10px 14px;
-      gap: 10px;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      white-space: nowrap;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #6B6B88;
-      letter-spacing: 0.03em;
-      min-height: var(--status-h);
+      display: flex; align-items: center; gap: 16px;
+      padding: 0 12px;
+      background: #0D0D13; border-top: 1px solid var(--line);
+      font-size: 11.5px; color: var(--muted);
+      white-space: nowrap; overflow: hidden;
     }
-    .status-item { display: flex; align-items: center; gap: 5px; }
-    .status-dot {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: #4A4A62;
-    }
-    .status-dot.green  { background: #22C55E; }
-    .status-dot.amber  { background: #F59E0B; }
-    .status-dot.red    { background: #EF4444; }
-    .status-dot.purple { background: #6C63FF; }
+    .status-item { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .status-item:first-child { overflow: hidden; }
+    .status-item:first-child span:last-child { overflow: hidden; text-overflow: ellipsis; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex-shrink: 0; }
+    .status-dot.green { background: var(--ok); }
+    .status-dot.amber { background: var(--warn); }
+    .status-dot.red   { background: var(--err); }
+    #edge-ai-status { margin-left: auto; gap: 4px; }
+    .badge { font: 10px var(--mono); padding: 1px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; }
+    .badge-loading { background: rgba(245,158,11,.12); color: var(--warn); }
+    .badge-ready   { background: rgba(34,197,94,.10);  color: var(--ok); }
+    .badge-error   { background: rgba(239,68,68,.12);  color: var(--err); }
 
     /* ════════════════════════════════════════════════════════
-       EDGE AI STATUS BADGE  (shown in status bar)
-    ════════════════════════════════════════════════════════ */
-    #edge-ai-status {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    #edge-ai-status .badge {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 8.5px;
-      padding: 1px 6px;
-      border-radius: 3px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    .badge-loading { background: rgba(245,158,11,0.15); color: #F59E0B; border: 1px solid rgba(245,158,11,0.3); }
-    .badge-ready   { background: rgba(34,197,94,0.12);  color: #22C55E; border: 1px solid rgba(34,197,94,0.25); }
-    .badge-error   { background: rgba(239,68,68,0.12);  color: #EF4444; border: 1px solid rgba(239,68,68,0.25); }
-
-    /* ════════════════════════════════════════════════════════
-       PROGRESS BAR
+       PROGRESS, TOASTS
     ════════════════════════════════════════════════════════ */
     #progress-track {
-      position: fixed;
-      top: calc(var(--header-h) + 12px);
-      left: 0;
-      right: 0;
-      height: 2px;
-      z-index: 200;
-      display: none;
-      background: #1E1E2A;
+      position: fixed; left: 0; right: 0;
+      top: calc(var(--topbar-h) + env(safe-area-inset-top));
+      height: 2px; z-index: 200; display: none; background: var(--line);
     }
-    #progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #6C63FF, #9B95FF);
-      width: 0%;
-      transition: width 0.3s ease;
-    }
+    #progress-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-hi)); transition: width .3s; }
 
-    /* ════════════════════════════════════════════════════════
-       TOAST NOTIFICATIONS
-    ════════════════════════════════════════════════════════ */
     #toast-container {
-      position: fixed;
-      bottom: calc(var(--mobnav-h) + var(--status-h) + 12px);
-      right: max(12px, env(safe-area-inset-right));
-      left: max(12px, env(safe-area-inset-left));
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      z-index: 1000;
-      pointer-events: none;
+      position: fixed; z-index: 1000; pointer-events: none;
+      left: 12px; right: 12px;
+      bottom: calc(var(--mobnav-h) + var(--status-h) + 12px + env(safe-area-inset-bottom));
+      display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
     }
     .toast {
-      background: #1E1E2A;
-      border: 1px solid #2A2A38;
-      border-radius: 7px;
-      padding: 9px 14px;
-      font-size: 12px;
-      color: #E8E8F0;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      transform: translateX(120%);
-      opacity: 0;
-      transition: all 0.2s ease;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-      max-width: 300px;
+      display: flex; align-items: center; gap: 8px;
+      max-width: 340px; padding: 9px 14px;
+      background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px;
+      font-size: 13px; color: var(--text);
+      box-shadow: 0 6px 24px rgba(0,0,0,.45);
+      opacity: 0; transform: translateY(8px); transition: opacity .2s, transform .2s;
     }
-    .toast.show { transform: translateX(0); opacity: 1; }
-    .toast-icon { font-size: 14px; flex-shrink: 0; }
-    .toast.success { border-left: 3px solid #22C55E; }
-    .toast.error   { border-left: 3px solid #EF4444; }
-    .toast.info    { border-left: 3px solid #6C63FF; }
+    .toast.show { opacity: 1; transform: none; }
+    .toast-icon { flex-shrink: 0; }
+    .toast.success { border-left: 3px solid var(--ok); }
+    .toast.error   { border-left: 3px solid var(--err); }
+    .toast.info    { border-left: 3px solid var(--accent); }
 
     /* ════════════════════════════════════════════════════════
-       MODAL
+       OPEN-FILE DIALOG
     ════════════════════════════════════════════════════════ */
     #modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.7);
-      backdrop-filter: blur(4px);
-      z-index: 500;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.15s ease;
+      position: fixed; inset: 0; z-index: 500;
+      display: flex; align-items: flex-end; justify-content: center;
+      background: rgba(0,0,0,.65); backdrop-filter: blur(3px);
+      opacity: 0; pointer-events: none; transition: opacity .15s;
     }
-    #modal-overlay.open {
-      opacity: 1;
-      pointer-events: all;
-    }
+    #modal-overlay.open { opacity: 1; pointer-events: auto; }
     .modal {
-      background: #16161F;
-      border: 1px solid #2A2A38;
-      border-radius: 12px;
-      width: 560px;
-      max-width: 90vw;
-      box-shadow: 0 24px 80px rgba(0,0,0,0.6);
-      overflow: hidden;
+      width: 100%; max-height: 92dvh; overflow: auto;
+      background: var(--panel-2); border: 1px solid var(--line-2);
+      border-radius: 16px 16px 0 0;
+      box-shadow: 0 24px 80px rgba(0,0,0,.6);
     }
-    .modal-head {
-      padding: 16px 20px;
-      border-bottom: 1px solid #2A2A38;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .modal-title {
-      font-family: 'Syne', sans-serif;
-      font-weight: 700;
-      font-size: 15px;
-      color: #E8E8F0;
-    }
-    .modal-close {
-      width: 26px;
-      height: 26px;
-      background: #1E1E2A;
-      border: 1px solid #2A2A38;
-      border-radius: 5px;
-      cursor: pointer;
-      color: #6B6B88;
-      font-size: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.1s;
-    }
-    .modal-close:hover { background: #2A2A38; color: #E8E8F0; }
-    .modal-body { padding: 20px; }
-    .modal-footer {
-      padding: 14px 20px;
-      border-top: 1px solid #1A1A24;
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-    }
-    .modal-textarea {
-      width: 100%;
-      height: 200px;
-      background: #0A0A0F;
-      border: 1px solid #2A2A38;
-      border-radius: 7px;
-      padding: 12px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #E8E8F0;
-      resize: vertical;
-      outline: none;
-      line-height: 1.6;
-    }
-    .modal-textarea:focus { border-color: #6C63FF; }
-    .ocr-textarea {
-      width: 100%;
-      height: 120px;
-      background: #0A0A0F;
-      border: 1px solid #2A2A38;
-      border-radius: 7px;
-      padding: 10px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10.5px;
-      color: #E8E8F0;
-      resize: vertical;
-      outline: none;
-      line-height: 1.5;
-    }
-    .ocr-textarea:focus { border-color: #6C63FF; }
-    .modal-hint {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9.5px;
-      color: #4A4A62;
-      margin-top: 8px;
-      line-height: 1.6;
-    }
-
-    .tab-row {
-      display: flex;
-      gap: 2px;
-      margin-bottom: 14px;
-      background: #0A0A0F;
-      padding: 3px;
-      border-radius: 7px;
-      border: 1px solid #1E1E2A;
-    }
+    .modal-head { display: flex; align-items: center; padding: 12px 12px 12px 20px; border-bottom: 1px solid var(--line); }
+    .modal-head h2 { flex: 1; font-size: 16px; font-weight: 650; }
+    .modal-body { padding: 16px 20px; }
+    .modal-footer { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
+    .tab-row { display: flex; gap: 2px; padding: 3px; margin-bottom: 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
     .tab-btn {
-      flex: 1;
-      padding: 6px 10px;
-      text-align: center;
-      border-radius: 5px;
-      font-size: 11.5px;
-      font-weight: 500;
-      cursor: pointer;
-      border: none;
-      background: transparent;
-      color: #6B6B88;
-      transition: all 0.12s;
+      flex: 1; height: 32px; border: 0; border-radius: 6px; background: transparent;
+      color: var(--muted); font-size: 13px; font-weight: 500; cursor: pointer;
     }
-    .tab-btn.active {
-      background: #1E1E2A;
-      color: #E8E8F0;
-    }
-
+    .tab-btn.active { background: var(--panel-2); color: var(--text); box-shadow: 0 0 0 1px var(--line-2); }
     #modal-drop-zone {
-      border: 1.5px dashed #2A2A38;
-      border-radius: 8px;
-      padding: 24px 16px;
-      min-height: 40vh;
-      text-align: center;
-      cursor: pointer;
-      transition: all 0.15s;
-      background: #0A0A0F;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+      min-height: 200px; padding: 28px 16px; text-align: center; cursor: pointer;
+      background: var(--bg); border: 2px dashed var(--line-2); border-radius: 10px;
+      transition: border-color .15s, background .15s;
     }
-    #modal-drop-zone:hover,
-    #modal-drop-zone.drag-over {
-      border-color: #6C63FF;
-      background: rgba(108,99,255,0.04);
+    #modal-drop-zone:hover, #modal-drop-zone.drag-over { border-color: var(--accent); background: rgba(108,99,255,.05); }
+    .drop-icon { color: var(--accent-hi); margin-bottom: 6px; }
+    .drop-text { font-size: 15px; font-weight: 600; }
+    .drop-sub { font: 11px var(--mono); color: var(--faint); }
+    .modal-textarea {
+      width: 100%; height: 200px; resize: vertical;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px;
+      padding: 10px 12px; font: 12px/1.6 var(--mono); color: var(--text); outline: none;
     }
-    .drop-icon { font-size: 28px; margin-bottom: 8px; opacity: 0.4; }
-    .drop-text {
-      font-size: 16px;
-      font-weight: 600;
-      color: #6B6B88;
-      margin-bottom: 4px;
+    .modal-textarea:focus { border-color: var(--accent); }
+    .modal-hint { margin-top: 10px; font-size: 12px; color: var(--faint); }
+    .modal-hint code { color: #B7B2FF; font-family: var(--mono); }
+
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+    .desktop-only { display: none !important; }
+
+    /* Phones: drop the name first, button labels only on the narrowest. */
+    @media (max-width: 479px) {
+      .brand-name { display: none; }
+      #topbar { gap: 6px; padding: 0 10px; }
+      #btn-import, #btn-export { padding: 0 10px; }
     }
-    .drop-sub {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9.5px;
-      color: #3A3A52;
+    @media (max-width: 359px) {
+      .btn-import-label, .export-label { display: none; }
+      #btn-import, #btn-export { width: 36px; padding: 0; }
     }
 
     /* ════════════════════════════════════════════════════════
-       MISC UTILITIES
+       DESKTOP (≥ 900px): three columns, no drawers
     ════════════════════════════════════════════════════════ */
-    .hidden  { display: none !important; }
-    .divider { height: 1px; background: #1A1A24; margin: 0 8px; }
-
-    [data-tip] { position: relative; }
-    [data-tip]:hover::after {
-      content: attr(data-tip);
-      position: absolute;
-      bottom: calc(100% + 6px);
-      left: 50%;
-      transform: translateX(-50%);
-      background: #1E1E2A;
-      border: 1px solid #2A2A38;
-      color: #E8E8F0;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9.5px;
-      padding: 4px 8px;
-      border-radius: 4px;
-      white-space: nowrap;
-      pointer-events: none;
-      z-index: 100;
-      letter-spacing: 0.04em;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .spinner {
-      display: inline-block;
-      width: 13px;
-      height: 13px;
-      border: 2px solid rgba(255,255,255,0.15);
-      border-top-color: #9B95FF;
-      border-radius: 50%;
-      animation: spin 0.65s linear infinite;
-      vertical-align: middle;
-    }
-
-    @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(5px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .layer-item { animation: fadeUp 0.15s ease both; }
-
-    /* Mobile-only panel toggles & compact status */
-    .mobile-only { display: flex; }
-    .desktop-only,
-    .desktop-toolbar { display: none !important; }
-    .status-item.status-verbose,
-    #edge-ai-status { display: none; }
-
-    .apply-btn,
-    .tab-btn {
-      min-height: 48px;
-      font-size: 16px;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .tab-btn { padding: 10px 12px; }
-
-    .step-btn {
-      min-width: 48px;
-      min-height: 48px;
-      font-size: 18px;
-    }
-
-    .modal-close {
-      min-width: 48px;
-      min-height: 48px;
-    }
-
-  /* ════════════════════════════════════════════════════════
-     DESKTOP (≥768px)
-  ════════════════════════════════════════════════════════ */
-    @media (max-width: 767px) {
-      .modal {
-        width: 100%;
-        max-width: 100%;
-        max-height: 92dvh;
-        margin: 0 12px;
-        border-radius: 16px;
-      }
-      #modal-overlay {
-        align-items: flex-end;
-        padding: 0 0 env(safe-area-inset-bottom, 0px);
-      }
-    }
-
-    @media (min-width: 768px) {
-      html, body { font-size: 13px; }
-      body { padding: 0; }
-
+    @media (min-width: 900px) {
       #app {
-        grid-template-columns: 260px 1fr 280px;
-        grid-template-rows: 48px 1fr 28px;
+        grid-template-columns: 250px minmax(0, 1fr) 300px;
+        grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--status-h);
         grid-template-areas:
-          "topbar  topbar  topbar"
-          "sidebar canvas  props"
+          "topbar  topbar topbar"
+          "sidebar canvas props"
           "statusbar statusbar statusbar";
       }
-
-      #mobile-nav,
-      #mobile-more-sheet { display: none !important; }
-
-      #topbar {
-        flex-direction: row;
-        align-items: center;
-        padding: env(safe-area-inset-top) 20px 0 20px;
-        gap: 0;
+      .panel {
+        position: static; width: auto; transform: none; transition: none;
+        box-shadow: none; padding: 0; min-height: 0;
       }
+      /* IDs, to outrank the drawers' off-screen transforms above. */
+      #sidebar     { grid-area: sidebar; transform: none; }
+      #props-panel { grid-area: props;   transform: none; }
+      #panel-backdrop, #mobile-nav, #mobile-more-sheet, .mobile-only { display: none !important; }
+      .desktop-only { display: flex !important; }
 
-      .topbar-header-row {
-        display: contents;
-      }
+      #canvas-area { padding: 28px; }
+      .cta-desktop { display: inline; }
+      .cta-mobile  { display: none; }
 
-      .topbar-import-btn {
-        min-width: auto;
-        padding: 0 10px !important;
-        font-weight: 500;
-      }
-
-      .topbar-scroll.desktop-toolbar {
-        display: flex !important;
-        flex: 1;
-        min-width: 0;
-        align-items: center;
-        overflow: visible;
-        white-space: normal;
-        flex-wrap: wrap;
-      }
-
-      .welcome-desktop-only { display: block; }
-      .welcome-glyph,
-      .welcome-cta { display: block; }
-      .welcome-card,
-      .welcome-upload-icon,
-      .welcome-title,
-      .welcome-subtitle { display: none !important; }
-
-      #welcome-drop {
-        inset: 0;
-        border: none;
-        background: transparent;
-      }
-      #welcome-drop .welcome-card { display: none; }
-
-      .wordmark { font-size: 17px; }
-
-      #sidebar,
-      #props-panel {
-        position: static;
-        width: auto;
-        transform: none;
-        transition: none;
-        box-shadow: none;
-        padding-top: 0;
-        padding-bottom: 0;
-      }
-      #sidebar { grid-area: sidebar; }
-      #props-panel { grid-area: props; }
-
-      #panel-backdrop { display: none !important; }
-
-      .mobile-only { display: none !important; }
-      .desktop-only { display: inline; }
-      .desktop-toolbar { display: flex !important; }
-      .status-item.status-verbose { display: flex; }
-      #edge-ai-status { display: flex; }
-
-      .tool-btn {
-        min-height: 30px;
-        min-width: auto;
-        height: 30px;
-        padding: 0 10px;
-        font-size: 12px;
-        border-radius: 5px;
-      }
-
-      .upload-btn {
-        min-height: auto;
-        font-size: 11.5px;
-        padding: 10px 14px;
-      }
-
-      #canvas-area {
-        justify-content: center;
-        padding: 32px;
-      }
-
-      #welcome-drop {
-        pointer-events: none;
-        cursor: default;
-      }
-
-      .welcome-cta .cta-desktop,
-      .empty-sub .cta-desktop,
-      .drop-text .cta-desktop { display: inline; }
-      .welcome-cta .cta-mobile,
-      .empty-sub .cta-mobile,
-      .drop-text .cta-mobile  { display: none; }
-
-      #modal-drop-zone {
-        min-height: auto;
-        padding: 32px 20px;
-        display: block;
-      }
-
-      .drop-text { font-size: 12px; }
-
-      #progress-track {
-        top: calc(48px + env(safe-area-inset-top));
-        left: 260px;
-        right: 280px;
-      }
-
-      #toast-container {
-        left: auto;
-        bottom: 48px;
-        right: 20px;
-      }
-
-      #statusbar {
-        padding: 0 16px env(safe-area-inset-bottom, 0px);
-        gap: 20px;
-        font-size: 9.5px;
-        min-height: 28px;
-      }
-
-      .apply-btn,
-      .tab-btn {
-        min-height: auto;
-        font-size: 11.5px;
-      }
-      .tab-btn { padding: 6px 10px; }
-
-      .step-btn {
-        min-width: 22px;
-        min-height: auto;
-        font-size: 14px;
-      }
-
-      .modal-close {
-        min-width: 26px;
-        min-height: 26px;
-      }
+      #toast-container { left: auto; right: 316px; bottom: calc(var(--status-h) + 14px); }
+      #modal-overlay { align-items: center; }
+      .modal { width: 560px; max-width: 92vw; border-radius: 14px; }
     }
   </style>
 </head>
@@ -1456,17 +631,18 @@
 
 <div id="panel-backdrop" onclick="closeAllMobileOverlays()" aria-hidden="true"></div>
 
+<!-- Mobile "More" sheet: everything the desktop topbar has that the phone layout doesn't. -->
 <div id="mobile-more-sheet" class="mobile-only" aria-hidden="true">
-  <div class="more-sheet-title">Tools</div>
-  <div id="more-zoom-label">100%</div>
-  <div class="more-sheet-grid">
-    <button type="button" class="tool-btn" onclick="CanvasView.zoom(-0.1); syncZoomLabel()">Zoom −</button>
-    <button type="button" class="tool-btn" onclick="CanvasView.fitToWindow(); syncZoomLabel()">Fit</button>
-    <button type="button" class="tool-btn" onclick="CanvasView.zoom(0.1); syncZoomLabel()">Zoom +</button>
-    <button type="button" class="tool-btn" id="btn-undo-more" disabled onclick="EditorState.undo()">Undo</button>
-    <button type="button" class="tool-btn" id="btn-redo-more" disabled onclick="EditorState.redo()">Redo</button>
-    <button type="button" class="tool-btn danger" id="btn-reset-more" disabled onclick="resetAll()">Reset</button>
-    <button type="button" class="tool-btn" onclick="configureOcrServer()">OCR Server</button>
+  <div class="sheet-zoom">
+    <button type="button" class="btn btn-icon" aria-label="Zoom out" onclick="CanvasView.zoom(-0.1)">−</button>
+    <span id="more-zoom-label">100%</span>
+    <button type="button" class="btn btn-icon" aria-label="Zoom in" onclick="CanvasView.zoom(0.1)">+</button>
+  </div>
+  <div class="sheet-grid">
+    <button type="button" class="btn" id="btn-undo-more" disabled onclick="EditorState.undo()">Undo</button>
+    <button type="button" class="btn" id="btn-redo-more" disabled onclick="EditorState.redo()">Redo</button>
+    <button type="button" class="btn" id="btn-reset-more" disabled onclick="resetAll()">Reset all edits</button>
+    <button type="button" class="btn" onclick="configureOcrServer()">OCR server…</button>
   </div>
 </div>
 
@@ -1474,108 +650,94 @@
 
   <!-- ═══════════════════════════════ TOP BAR ═══════════════════════════════ -->
   <header id="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <span class="brand-name">PixelScribe</span>
+    </div>
 
-    <div class="topbar-header-row">
-      <div class="topbar-brand">
-      <div class="wordmark">PIXEL<em>SCRIBE</em></div>
-      <div class="topbar-sep desktop-only"></div>
-      <div class="topbar-tag desktop-only">edge ai · offline · wasm</div>
-      </div>
-      <button type="button" class="tool-btn primary topbar-import-btn" id="btn-import" data-tip="Import an image, a PDF, or a JSON payload" onclick="openModal()">
-        <svg width="16" height="16" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4a1 1 0 011-1h3l1.5 2H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" stroke-width="1.4"/></svg>
-        Import
+    <button type="button" class="btn btn-primary" id="btn-import" title="Open an image, PDF or JSON payload (Ctrl+O)" onclick="openModal()">
+      <svg width="16" height="16" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4a1 1 0 011-1h3l1.5 2H13a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke="currentColor" stroke-width="1.4"/></svg>
+      <span class="btn-import-label">Open</span>
+    </button>
+
+    <div class="tb-sep desktop-only"></div>
+    <div class="tb-group desktop-only">
+      <button type="button" class="btn btn-icon" id="btn-undo" disabled title="Undo (Ctrl+Z)" aria-label="Undo" onclick="EditorState.undo()">
+        <svg width="15" height="15" fill="none" viewBox="0 0 16 16"><path d="M5 3L2 6l3 3M2 6h7.5a4.5 4.5 0 010 9H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button type="button" class="btn btn-icon" id="btn-redo" disabled title="Redo (Ctrl+Shift+Z)" aria-label="Redo" onclick="EditorState.redo()">
+        <svg width="15" height="15" fill="none" viewBox="0 0 16 16"><path d="M11 3l3 3-3 3M14 6H6.5a4.5 4.5 0 000 9H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>
 
-    <div class="topbar-scroll desktop-toolbar">
-      <div class="topbar-sep"></div>
-
-    <div class="toolbar-group">
-      <button class="tool-btn" id="btn-undo" disabled data-tip="Undo last text change (Ctrl+Z)" onclick="EditorState.undo()">
-        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M3 7l3-3-3-3M3 7h6a4 4 0 010 8H6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Undo
+    <div class="tb-sep desktop-only"></div>
+    <div class="tb-group desktop-only">
+      <button type="button" class="btn btn-icon" title="Zoom out (Ctrl −)" aria-label="Zoom out" onclick="CanvasView.zoom(-0.1)">
+        <svg width="15" height="15" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M4.5 7h5M11 11l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       </button>
-      <button class="tool-btn" id="btn-redo" disabled data-tip="Redo (Ctrl+Shift+Z)" onclick="EditorState.redo()">
-        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M13 7l-3-3 3-3M13 7H7a4 4 0 000 8h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Redo
+      <span id="zoom-label" class="zoom-label" title="Current zoom">100%</span>
+      <button type="button" class="btn btn-icon" title="Zoom in (Ctrl +)" aria-label="Zoom in" onclick="CanvasView.zoom(0.1)">
+        <svg width="15" height="15" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M7 4.5v5M4.5 7h5M11 11l3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
       </button>
+      <button type="button" class="btn" title="Show the whole image (Ctrl 0)" onclick="CanvasView.fitToWindow()">Fit</button>
     </div>
 
-    <div class="topbar-sep"></div>
+    <div class="tb-spacer"></div>
 
-    <div class="toolbar-group">
-      <button class="tool-btn" data-tip="Zoom out" onclick="CanvasView.zoom(-0.1)">
-        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M4 7h6M12 12l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-      </button>
-      <span id="zoom-label" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#6B6B88;padding:0 4px;min-width:38px;text-align:center;">100%</span>
-      <button class="tool-btn" data-tip="Zoom in" onclick="CanvasView.zoom(0.1)">
-        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.4"/><path d="M7 4v6M4 7h6M12 12l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-      </button>
-      <button class="tool-btn" data-tip="Fit to window" onclick="CanvasView.fitToWindow()">Fit</button>
-    </div>
+    <button type="button" class="btn desktop-only" id="btn-reset" disabled title="Put every line back to the text that was detected" onclick="resetAll()">Reset edits</button>
 
-      <div class="topbar-sep"></div>
-
-      <div class="toolbar-group">
-      <button type="button" class="tool-btn danger" id="btn-reset" disabled data-tip="Reset all edits" onclick="resetAll()">
-        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M3 8A5 5 0 1113 8M3 8l-2-2m2 2l2-2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Reset
-      </button>
-      <button type="button" class="tool-btn" data-tip="Set optional Python OCR server fallback" onclick="configureOcrServer()">OCR Server</button>
-      <div class="topbar-sep"></div>
-      <button type="button" class="tool-btn primary" id="btn-export" disabled data-tip="Flatten & download composite PNG" onclick="ExportEngine.download()">
-        <svg width="12" height="12" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v7M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Export PNG
+    <div class="export-group">
+      <select id="export-format" class="select" title="Export format" aria-label="Export format" onchange="ExportEngine.syncLabels()">
+        <option value="same">Same as file</option>
+        <option value="png">PNG</option>
+        <option value="jpeg">JPG</option>
+        <option value="webp">WEBP</option>
+        <option value="pdf">PDF</option>
+      </select>
+      <button type="button" class="btn btn-primary" id="btn-export" disabled title="Download the edited image (Ctrl+S)" onclick="ExportEngine.download()">
+        <svg width="15" height="15" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8M4.5 7L8 10.5 11.5 7M3 13.5h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="export-label">Export PNG</span>
       </button>
     </div>
-    </div>
-
   </header>
 
-  <!-- ═══════════════════════════════ LEFT SIDEBAR ═══════════════════════════ -->
-  <aside id="sidebar">
-
-    <div class="panel-header">
-      <span style="color:#6B6B88;letter-spacing:0.12em;">LAYERS</span>
-      <span id="layer-count">0</span>
+  <!-- ═══════════════════════════════ LEFT: TEXT LIST ════════════════════════ -->
+  <aside id="sidebar" class="panel" aria-label="Text found in the image">
+    <div class="panel-head">
+      <span class="title">Text in image</span>
+      <span id="layer-count" class="count">0</span>
+      <button type="button" class="btn btn-icon mobile-only" aria-label="Close" onclick="closeMobilePanels()">✕</button>
     </div>
-
-    <div id="layer-list">
-      <div class="empty-state" id="empty-state">
-        <div class="empty-icon">⬚</div>
-        <div class="empty-title">No blocks loaded</div>
-        <div class="empty-sub">
-          <span class="cta-mobile">Tap Import to select an image or PDF</span>
-          <span class="cta-desktop">Import a JSON payload or<br>drag an image / PDF to begin</span>
+    <div class="panel-scroll">
+      <p class="panel-hint">Pick a line here or click it on the image to edit it.</p>
+      <div id="layer-list">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-title">No text yet</div>
+          <div class="empty-sub">Open an image or PDF. Every line of text found in it will be listed here.</div>
         </div>
       </div>
     </div>
-
-    <div class="divider"></div>
-
-    <div class="upload-btn" onclick="openModal()" id="sidebar-upload-btn">
-      <div style="font-size:18px;margin-bottom:4px;opacity:0.4;">⊕</div>
-      <div>Import an image, PDF, or JSON</div>
-    </div>
-
   </aside>
 
-  <!-- ═══════════════════════════════ CANVAS AREA ════════════════════════════ -->
+  <!-- ═══════════════════════════════ CANVAS ═════════════════════════════════ -->
   <main id="canvas-area" ondragover="handleDragOver(event)" ondrop="handleFileDrop(event)" ondragleave="handleDragLeave()">
 
-    <div id="welcome-drop" role="button" tabindex="0" aria-label="Import image or PDF" onclick="openModal()" onkeydown="if(event.key==='Enter'||event.key===' ')openModal()">
+    <div id="welcome-drop" role="button" tabindex="0" aria-label="Open an image or PDF" onclick="openModal()" onkeydown="if(event.key==='Enter'||event.key===' ')openModal()">
       <div class="welcome-card">
-        <div class="welcome-upload-icon" aria-hidden="true">
-          <svg width="36" height="36" fill="none" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div class="welcome-icon" aria-hidden="true">
+          <svg width="30" height="30" fill="none" viewBox="0 0 24 24"><path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>
-        <p class="welcome-title">Import an image or PDF</p>
-        <p class="welcome-subtitle">Tap here to select a file</p>
-      </div>
-      <div class="welcome-desktop-only">
-        <div class="welcome-glyph">EDIT<br>TEXT</div>
-        <div class="welcome-cta">
-          <span class="cta-desktop">Import JSON payload · Drag an image / PDF · Press Ctrl+O</span>
-        </div>
+        <h1 class="welcome-title">Open an image or PDF</h1>
+        <p class="welcome-sub">
+          <span class="cta-desktop">Drop a file here, or click to choose one.</span>
+          <span class="cta-mobile">Tap to choose a file.</span>
+        </p>
+        <ol class="welcome-steps">
+          <li>The text in it is found automatically.</li>
+          <li>Click any line to retype it — the font is matched for you.</li>
+          <li>Export, in the same format you opened or another.</li>
+        </ol>
+        <p class="welcome-formats">JPG · PNG · WEBP · BMP · GIF · PDF</p>
       </div>
     </div>
 
@@ -1586,321 +748,245 @@
 
   </main>
 
-  <!-- ═══════════════════════════════ MOBILE BOTTOM NAV ════════════════════════ -->
-  <nav id="mobile-nav" class="mobile-only" aria-label="Main actions">
-    <button type="button" class="mob-nav-btn" aria-label="Layers" onclick="toggleMobilePanel('sidebar')">
+  <!-- ═══════════════════════════════ RIGHT: EDIT PANEL ══════════════════════ -->
+  <aside id="props-panel" class="panel" aria-label="Edit selected text">
+    <div class="panel-head">
+      <span class="title">Edit text</span>
+      <button type="button" class="btn btn-icon mobile-only" aria-label="Close" onclick="closeMobilePanels()">✕</button>
+    </div>
+
+    <div class="panel-scroll">
+      <div class="props-empty">
+        <svg width="40" height="40" fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5h16v2M9 19h6M12 5v14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <p>Select a line of text on the image to change its font, size or colour.</p>
+      </div>
+
+      <div class="props-body">
+        <section class="props-section">
+          <div class="props-label">Detected text</div>
+          <div id="info-original" class="original-text">—</div>
+        </section>
+
+        <section class="props-section text-only">
+          <div class="props-label">Appearance</div>
+
+          <div class="field">
+            <span class="field-label">Font</span>
+            <select id="prop-font" class="select full" disabled onchange="PropsPanel.applyFont()"></select>
+          </div>
+          <div class="font-match">Closest matches: <span id="info-font-ai">—</span></div>
+
+          <div class="field">
+            <span class="field-label">Size</span>
+            <div class="field-controls">
+              <div class="stepper" id="stepper-size">
+                <button type="button" class="step-btn" aria-label="Smaller" onclick="PropsPanel.stepSize(-1)" disabled>−</button>
+                <input type="number" id="prop-size" value="16" min="1" max="400" disabled aria-label="Font size in pixels"
+                       onchange="PropsPanel.applySize()" onkeydown="if(event.key==='Enter')PropsPanel.applySize()" />
+                <button type="button" class="step-btn" aria-label="Larger" onclick="PropsPanel.stepSize(1)" disabled>+</button>
+              </div>
+              <button type="button" class="toggle" id="prop-bold" aria-pressed="false" title="Bold" disabled onclick="PropsPanel.toggleBold()"><b>B</b></button>
+              <button type="button" class="toggle" id="prop-italic" aria-pressed="false" title="Italic" disabled onclick="PropsPanel.toggleItalic()"><i>I</i></button>
+            </div>
+          </div>
+
+          <div class="field">
+            <span class="field-label">Colour</span>
+            <div class="field-controls">
+              <label class="color-swatch" id="swatch-fg" title="Pick a colour">
+                <input type="color" id="prop-color" value="#000000" disabled oninput="PropsPanel.applyColor()" onchange="PropsPanel.applyColor()" />
+              </label>
+              <input class="input" type="text" id="prop-color-hex" value="#000000" maxlength="7" disabled aria-label="Colour hex code"
+                     onchange="PropsPanel.applyColorHex()" />
+            </div>
+          </div>
+        </section>
+
+        <section class="props-section">
+          <button type="button" class="btn btn-secondary full" id="btn-keep-image" disabled onclick="PropsPanel.toggleKeepImage()">Keep as original image</button>
+          <p class="help">For logos, signatures and anything else that should stay exactly as it is in the file.</p>
+        </section>
+
+        <details class="props-section">
+          <summary>Details</summary>
+          <div class="coord-grid">
+            <div class="coord-cell"><div class="coord-key">X</div><div class="coord-val" id="coord-x">—</div></div>
+            <div class="coord-cell"><div class="coord-key">Y</div><div class="coord-val" id="coord-y">—</div></div>
+            <div class="coord-cell"><div class="coord-key">Width</div><div class="coord-val" id="coord-w">—</div></div>
+            <div class="coord-cell"><div class="coord-key">Height</div><div class="coord-val" id="coord-h">—</div></div>
+            <div class="coord-cell" style="grid-column:1/-1"><div class="coord-key">OCR confidence</div><div class="coord-val" id="info-conf">—</div></div>
+          </div>
+        </details>
+      </div>
+
+      <details class="props-section">
+        <summary>All detected text</summary>
+        <textarea id="ocr-text-output" class="ocr-textarea" readonly placeholder="Text found in the image appears here"></textarea>
+        <button type="button" class="btn btn-secondary full" onclick="copyOcrText()">Copy text</button>
+      </details>
+    </div>
+  </aside>
+
+  <!-- ═══════════════════════════════ MOBILE BOTTOM NAV ══════════════════════ -->
+  <nav id="mobile-nav" class="mobile-only" aria-label="Main">
+    <button type="button" class="mob-nav-btn" onclick="toggleMobilePanel('sidebar')">
       <svg fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      Layers
+      Text
     </button>
-    <button type="button" class="mob-nav-btn" aria-label="Properties" onclick="toggleMobilePanel('props')">
-      <svg fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/></svg>
-      Props
+    <button type="button" class="mob-nav-btn" onclick="toggleMobilePanel('props')">
+      <svg fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5h16v2M9 19h6M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Edit
     </button>
-    <button type="button" class="mob-nav-btn mob-nav-primary" id="btn-export-mobile" disabled aria-label="Export PNG" onclick="ExportEngine.download()">
-      <svg fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0l-4-4m4 4l4-4M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Export
+    <button type="button" class="mob-nav-btn" onclick="CanvasView.fitToWindow()">
+      <svg fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Fit
     </button>
-    <button type="button" class="mob-nav-btn" aria-label="More tools" onclick="toggleMobileMore()">
-      <svg fill="none" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18" cy="12" r="1.5" fill="currentColor"/></svg>
+    <button type="button" class="mob-nav-btn" onclick="toggleMobileMore()">
+      <svg fill="none" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18" cy="12" r="1.6" fill="currentColor"/></svg>
       More
     </button>
   </nav>
 
-  <!-- ═══════════════════════════════ RIGHT PROPS PANEL ══════════════════════ -->
-  <aside id="props-panel">
-
-    <div class="props-section">
-      <div class="props-label">Typography</div>
-
-      <div class="field-row">
-        <span class="field-label">Font</span>
-        <select class="field-input" id="prop-font" disabled onchange="PropsPanel.applyFont()">
-          <option value="Arial">Arial</option>
-          <option value="Times New Roman">Times New Roman</option>
-          <option value="Courier New">Courier New</option>
-          <option value="Calibri">Calibri</option>
-          <option value="Georgia">Georgia</option>
-          <option value="Verdana">Verdana</option>
-          <option value="Helvetica">Helvetica</option>
-          <option value="system-ui">System UI</option>
-        </select>
-      </div>
-
-      <div class="field-row">
-        <span class="field-label">Size</span>
-        <div class="stepper" id="stepper-size">
-          <button class="step-btn" onclick="PropsPanel.stepSize(-1)" disabled>−</button>
-          <input type="number" id="prop-size" value="16" min="4" max="200" disabled
-                 onchange="PropsPanel.applySize()" onkeydown="if(event.key==='Enter')PropsPanel.applySize()" />
-          <button class="step-btn" onclick="PropsPanel.stepSize(1)" disabled>+</button>
-        </div>
-      </div>
-
-      <div class="field-row">
-        <span class="field-label">Color</span>
-        <div class="color-wrap">
-          <div class="color-swatch" id="swatch-fg" style="background:#E8E8F0">
-            <input type="color" id="prop-color" value="#E8E8F0" disabled onchange="PropsPanel.applyColor()" />
-          </div>
-          <input class="color-hex" type="text" id="prop-color-hex" value="#E8E8F0" maxlength="7" disabled
-                 onchange="PropsPanel.applyColorHex()" />
-        </div>
-      </div>
-
-      <button class="apply-btn" id="btn-apply-all" disabled onclick="PropsPanel.applyAll()">
-        Apply to Selected Block
-      </button>
-    </div>
-
-    <div class="props-section">
-      <div class="props-label">Block Coordinates</div>
-      <div class="coord-grid">
-        <div class="coord-cell">
-          <div class="coord-key">X PX</div>
-          <div class="coord-val" id="coord-x">—</div>
-        </div>
-        <div class="coord-cell">
-          <div class="coord-key">Y PX</div>
-          <div class="coord-val" id="coord-y">—</div>
-        </div>
-        <div class="coord-cell">
-          <div class="coord-key">WIDTH</div>
-          <div class="coord-val" id="coord-w">—</div>
-        </div>
-        <div class="coord-cell">
-          <div class="coord-key">HEIGHT</div>
-          <div class="coord-val" id="coord-h">—</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="props-section">
-      <div class="props-label">Block Info</div>
-      <div class="field-row">
-        <span class="field-label">Detected</span>
-        <span class="field-input" id="info-original" style="background:transparent;border-color:transparent;color:#6B6B88;font-size:10.5px;padding:4px 0;">—</span>
-      </div>
-      <div class="field-row">
-        <span class="field-label">Confidence</span>
-        <span id="info-conf" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#6B6B88;">—</span>
-      </div>
-      <!-- NEW: shows EdgeML font prediction -->
-      <div class="field-row">
-        <span class="field-label">Font (AI)</span>
-        <span id="info-font-ai" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#9B95FF;">—</span>
-      </div>
-    </div>
-
-    <div class="props-section">
-      <div class="props-label">OCR Text</div>
-      <textarea id="ocr-text-output" class="ocr-textarea" readonly placeholder="OCR text will appear here"></textarea>
-      <button class="apply-btn" onclick="copyOcrText()">Copy OCR Text</button>
-    </div>
-
-    <div class="props-section" style="margin-top:auto;">
-      <div class="props-label">Export</div>
-      <button class="tool-btn primary" id="btn-export-2" style="width:100%;justify-content:center;height:36px;"
-              disabled onclick="ExportEngine.download()">
-        <svg width="12" height="12" fill="none" viewBox="0 0 16 16"><path d="M8 3v7M5 7l3 3 3-3M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Flatten & Download PNG
-      </button>
-      <div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:#3A3A52;margin-top:8px;line-height:1.6;text-align:center;">
-        Full-resolution composite.<br>100% offline — no server calls.
-      </div>
-    </div>
-
-  </aside>
-
-  <!-- ═══════════════════════════════ STATUS BAR ═══════════════════════════════ -->
-  <div id="statusbar">
+  <!-- ═══════════════════════════════ STATUS BAR ═════════════════════════════ -->
+  <footer id="statusbar">
     <div class="status-item">
-      <div class="status-dot" id="dot-backend"></div>
-      <span id="label-backend">No image loaded</span>
+      <span class="status-dot" id="dot-backend"></span>
+      <span id="label-backend">Loading…</span>
     </div>
-    <div class="status-item">
-      <div class="status-dot"></div>
-      <span id="label-dimensions">—</span>
+    <div class="status-item desktop-only"><span id="label-dimensions">—</span></div>
+    <div class="status-item"><span id="label-blocks">0 blocks</span></div>
+    <div id="edge-ai-status" class="status-item desktop-only">
+      <span id="badge-ocr"  class="badge badge-loading" title="Text recognition (Tesseract)">OCR loading…</span>
+      <span id="badge-cv"   class="badge badge-loading" title="Text erasing (OpenCV)">CV loading…</span>
+      <span id="badge-onnx" class="badge badge-loading" title="Fallback font classifier (ONNX)">ONNX loading…</span>
     </div>
-    <div class="status-item">
-      <div class="status-dot"></div>
-      <span id="label-blocks">0 blocks</span>
-    </div>
-    <!-- Edge AI runtime status indicators -->
-    <div id="edge-ai-status" class="status-item">
-      <span id="badge-onnx"  class="badge badge-loading">ONNX loading…</span>
-      <span id="badge-cv"    class="badge badge-loading">CV loading…</span>
-      <span id="badge-ocr"   class="badge badge-loading">OCR loading...</span>
-    </div>
-    <div class="status-item status-verbose" style="margin-left:auto">
-      <div class="status-dot purple"></div>
-      <span>PixelScribe v3 · Edge AI · Pure WASM · No server</span>
-    </div>
-  </div>
+  </footer>
 
 </div>
 
-<!-- PROGRESS BAR -->
 <div id="progress-track"><div id="progress-fill"></div></div>
+<div id="toast-container" aria-live="polite"></div>
 
-<!-- TOAST CONTAINER -->
-<div id="toast-container"></div>
-
-<!-- MODAL -->
+<!-- ═══════════════════════════════ OPEN DIALOG ══════════════════════════════ -->
 <div id="modal-overlay" onclick="if(event.target===this) closeModal()">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-head">
-      <div class="modal-title">Import Source</div>
-      <button class="modal-close" onclick="closeModal()">✕</button>
+      <h2 id="modal-title">Open</h2>
+      <button type="button" class="btn btn-icon" aria-label="Close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-body">
 
-      <div class="tab-row">
-        <button class="tab-btn active" id="tab-json"  onclick="switchTab('json')">Paste JSON</button>
-        <button class="tab-btn"        id="tab-image" onclick="switchTab('image')">Image / PDF / JSON file</button>
-        <button class="tab-btn"        id="tab-url"   onclick="switchTab('url')">Image URL</button>
+      <div class="tab-row" role="tablist">
+        <button type="button" class="tab-btn active" id="tab-image" onclick="switchTab('image')">File</button>
+        <button type="button" class="tab-btn"        id="tab-url"   onclick="switchTab('url')">From URL</button>
+        <button type="button" class="tab-btn"        id="tab-json"  onclick="switchTab('json')">JSON payload</button>
       </div>
 
-      <!-- Tab: Paste JSON -->
-      <div id="pane-json">
-        <textarea class="modal-textarea" id="json-input"
-          placeholder='{&#10;  "bg_image": "data:image/jpeg;base64,…",&#10;  "image_w": 2400,&#10;  "image_h": 3000,&#10;  "blocks": [&#10;    { "text": "Hello", "x": 100, "y": 80, "w": 200, "h": 40, "color": "#1A1A1A", "size": 18, "font_family": "Arial" }&#10;  ]&#10;}'></textarea>
-        <div class="modal-hint">
-          Paste the full JSON payload. The <code style="color:#9B95FF;">bg_image</code> field accepts
-          a data URI (base64) or an absolute URL accessible without CORS restrictions.
-        </div>
-      </div>
-
-      <!-- Tab: Image / PDF / JSON file -->
-      <div id="pane-image" class="hidden">
+      <div id="pane-image">
         <div id="modal-drop-zone"
              onclick="document.getElementById('file-img-input').click()"
              ondragover="event.preventDefault();this.classList.add('drag-over')"
              ondrop="handleModalDrop(event)"
              ondragleave="this.classList.remove('drag-over')">
-          <!-- images (JPG/PNG/WEBP/BMP/GIF), PDF, and JSON payloads -->
           <input type="file" id="file-img-input" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.pdf,.json"
                  style="display:none" onchange="handleModalFileInput(event)" />
-          <div class="drop-icon">⬆</div>
+          <svg class="drop-icon" width="34" height="34" fill="none" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <div class="drop-text">
-            <span class="cta-mobile">Tap here to select an image or PDF</span>
-            <span class="cta-desktop">Drop an image, PDF, or JSON file here</span>
+            <span class="cta-desktop">Drop a file here, or click to choose</span>
+            <span class="cta-mobile">Tap to choose a file</span>
           </div>
-          <!-- PDF.js renders page 1 of uploaded PDFs to a canvas locally -->
-          <div class="drop-sub">JPG · PNG · WEBP · BMP · PDF (via PDF.js) · JSON</div>
+          <div class="drop-sub">JPG · PNG · WEBP · BMP · GIF · PDF (first page) · JSON</div>
         </div>
-          <div class="modal-hint" style="margin-top:10px;">
-          <strong style="color:#9B95FF;">PDF files</strong> are rendered client-side by PDF.js at 3× scale
-          (≈300 DPI), then OCR runs locally (TextDetector or Tesseract). No upload - your file stays on-device.<br>
-          <strong style="color:#9B95FF;">JSON files</strong> load a full editor payload directly.
-        </div>
+        <p class="modal-hint">Everything runs on this device — the file is never uploaded.</p>
       </div>
 
-      <!-- Tab: URL -->
       <div id="pane-url" class="hidden">
-        <div class="field-row" style="gap:8px">
-          <input class="field-input" type="url" id="url-input"
-                 placeholder="https://example.com/cleaned_image.jpg"
-                 style="flex:1;font-size:12px;padding:8px 10px;" />
-        </div>
-        <div class="modal-hint" style="margin-top:8px;">
-          Direct URL to a cleaned background image. Ensure the server sends CORS headers
-          (<code style="color:#9B95FF;">Access-Control-Allow-Origin: *</code>) or the export will be blocked.
-        </div>
+        <input class="input full" type="url" id="url-input" placeholder="https://example.com/image.jpg" />
+        <p class="modal-hint">The server must allow cross-origin access
+          (<code>Access-Control-Allow-Origin</code>), or exporting will be blocked.</p>
+      </div>
+
+      <div id="pane-json" class="hidden">
+        <textarea class="modal-textarea" id="json-input"
+          placeholder='{&#10;  "bg_image": "data:image/png;base64,…",&#10;  "image_w": 2400,&#10;  "image_h": 3000,&#10;  "blocks": [&#10;    { "text": "Hello", "x": 100, "y": 80, "w": 200, "h": 40, "color": "#1A1A1A", "size": 18, "font_family": "Arial" }&#10;  ]&#10;}'></textarea>
+        <p class="modal-hint">For tools that produce an editor payload. <code>bg_image</code> takes a data URI or a CORS-enabled URL.</p>
       </div>
 
     </div>
     <div class="modal-footer">
-      <button class="tool-btn" onclick="closeModal()">Cancel</button>
-      <button class="tool-btn primary" onclick="loadFromModal()">Load</button>
+      <button type="button" class="btn btn-link" title="Optional Python OCR server, used only if in-browser OCR fails" onclick="configureOcrServer()">OCR server…</button>
+      <div class="tb-spacer"></div>
+      <button type="button" class="btn" onclick="closeModal()">Cancel</button>
+      <button type="button" class="btn btn-primary hidden" id="modal-load-btn" onclick="loadFromModal()">Load</button>
     </div>
   </div>
 </div>
 
-<!-- Hidden file input for drag-drop on canvas -->
 <input type="file" id="file-hidden" accept=".jpg,.jpeg,.png,.webp,.bmp,.gif,.pdf,.json" style="display:none"
        onchange="handleHiddenFileInput(event)" />
-
-<!-- Hidden canvas for export -->
 <canvas id="export-canvas" style="display:none"></canvas>
 
 <script>
+  const DESKTOP_MQ = '(min-width: 900px)';
+
   function closeMobilePanels() {
     document.getElementById('sidebar').classList.remove('mobile-open');
     document.getElementById('props-panel').classList.remove('mobile-open');
     document.getElementById('panel-backdrop').classList.remove('visible');
   }
-
   function closeMobileMore() {
-    const sheet = document.getElementById('mobile-more-sheet');
-    if (sheet) sheet.classList.remove('open');
+    document.getElementById('mobile-more-sheet').classList.remove('open');
     document.getElementById('panel-backdrop').classList.remove('visible');
   }
-
-  function closeAllMobileOverlays() {
-    closeMobilePanels();
-    closeMobileMore();
-  }
+  function closeAllMobileOverlays() { closeMobilePanels(); closeMobileMore(); }
 
   function toggleMobilePanel(which) {
-    if (window.matchMedia('(min-width: 768px)').matches) return;
+    if (window.matchMedia(DESKTOP_MQ).matches) return;
     closeMobileMore();
-    const sidebar = document.getElementById('sidebar');
-    const props = document.getElementById('props-panel');
-    const backdrop = document.getElementById('panel-backdrop');
-    const target = which === 'sidebar' ? sidebar : props;
-    const other = which === 'sidebar' ? props : sidebar;
+    const target = document.getElementById(which === 'sidebar' ? 'sidebar' : 'props-panel');
+    const other  = document.getElementById(which === 'sidebar' ? 'props-panel' : 'sidebar');
     const willOpen = !target.classList.contains('mobile-open');
     other.classList.remove('mobile-open');
     target.classList.toggle('mobile-open', willOpen);
-    backdrop.classList.toggle('visible', willOpen);
+    document.getElementById('panel-backdrop').classList.toggle('visible', willOpen);
   }
-
   function toggleMobileMore() {
-    if (window.matchMedia('(min-width: 768px)').matches) return;
+    if (window.matchMedia(DESKTOP_MQ).matches) return;
     closeMobilePanels();
     const sheet = document.getElementById('mobile-more-sheet');
-    const backdrop = document.getElementById('panel-backdrop');
     const opening = !sheet.classList.contains('open');
     sheet.classList.toggle('open', opening);
-    backdrop.classList.toggle('visible', opening);
+    document.getElementById('panel-backdrop').classList.toggle('visible', opening);
     if (opening) syncZoomLabel();
   }
 
   function syncZoomLabel() {
     const z = document.getElementById('zoom-label');
-    const pct = z ? z.textContent : '100%';
-    const more = document.getElementById('more-zoom-label');
-    if (more) more.textContent = pct;
+    document.getElementById('more-zoom-label').textContent = z ? z.textContent : '100%';
   }
-
   function syncMobileButtons() {
-    const desktop = document.getElementById('btn-export');
-    const mobile = document.getElementById('btn-export-mobile');
-    if (desktop && mobile) mobile.disabled = desktop.disabled;
     ['btn-undo', 'btn-redo', 'btn-reset'].forEach((id) => {
-      const src = document.getElementById(id);
-      const more = document.getElementById(id + '-more');
+      const src = document.getElementById(id), more = document.getElementById(id + '-more');
       if (src && more) more.disabled = src.disabled;
     });
   }
 
   window.addEventListener('resize', () => {
-    if (window.matchMedia('(min-width: 768px)').matches) closeAllMobileOverlays();
+    if (window.matchMedia(DESKTOP_MQ).matches) closeAllMobileOverlays();
   });
 
   document.addEventListener('DOMContentLoaded', () => {
     syncMobileButtons();
     syncZoomLabel();
-    const z = document.getElementById('zoom-label');
-    if (z) new MutationObserver(syncZoomLabel).observe(z, { childList: true, characterData: true, subtree: true });
-    ['btn-export', 'btn-undo', 'btn-redo', 'btn-reset'].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) new MutationObserver(syncMobileButtons).observe(el, { attributes: true, attributeFilter: ['disabled'] });
+    new MutationObserver(syncZoomLabel).observe(document.getElementById('zoom-label'),
+      { childList: true, characterData: true, subtree: true });
+    ['btn-undo', 'btn-redo', 'btn-reset'].forEach((id) => {
+      new MutationObserver(syncMobileButtons).observe(document.getElementById(id),
+        { attributes: true, attributeFilter: ['disabled'] });
     });
   });
 </script>
 
-<!-- Main JS (edge AI + editor logic) -->
 <script src="main.js"></script>
 
 </body>
